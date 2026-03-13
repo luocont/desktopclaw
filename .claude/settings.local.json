@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from desktopclaw.channels.registry import load_channel_class, discover_channel_names; print\\(''Registry imports successfully''\\); print\\(''Available channels:'', discover_channel_names\\(\\)\\)\")",
+      "Bash(npm install:*)"
+    ]
+  }
+}

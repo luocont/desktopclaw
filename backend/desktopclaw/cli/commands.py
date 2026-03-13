@@ -511,10 +511,19 @@ def gateway(
 
     console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
 
+    # Start HTTP API server for frontend
+    from desktopclaw.api.server import start_api_server
+
     async def run():
+        api_server = None
         try:
             await cron.start()
             await heartbeat.start()
+
+            # Start HTTP API server
+            api_server = await start_api_server(agent, bus, port)
+            console.print(f"[green]✓[/green] HTTP API server started on port {port}")
+
             await asyncio.gather(
                 agent.run(),
                 channels.start_all(),
@@ -522,6 +531,8 @@ def gateway(
         except KeyboardInterrupt:
             console.print("\nShutting down...")
         finally:
+            if api_server:
+                await api_server.stop()
             await agent.close_mcp()
             heartbeat.stop()
             cron.stop()
@@ -536,6 +547,81 @@ def gateway(
 # ============================================================================
 # Agent Commands
 # ============================================================================
+
+
+@app.command()
+def api(
+    port: int = typer.Option(3000, "--port", "-p", help="API server port"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+    logs: bool = typer.Option(False, "--logs/--no-logs", help="Show nanobot runtime logs during chat"),
+):
+    """Start the HTTP API server for frontend integration."""
+    from loguru import logger
+
+    from desktopclaw.agent.loop import AgentLoop
+    from desktopclaw.api.server import start_api_server
+    from desktopclaw.bus.queue import MessageBus
+    from desktopclaw.config.paths import get_cron_dir
+    from desktopclaw.cron.service import CronService
+
+    config = _load_runtime_config(config, workspace)
+    _print_deprecated_memory_window_notice(config)
+    sync_workspace_templates(config.workspace_path)
+
+    bus = MessageBus()
+    provider = _make_provider(config)
+
+    # Create cron service for tool usage
+    cron_store_path = get_cron_dir() / "jobs.json"
+    cron = CronService(cron_store_path)
+
+    if logs:
+        logger.enable("nanobot")
+    else:
+        logger.disable("nanobot")
+
+    agent_loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=config.workspace_path,
+        model=config.agents.defaults.model,
+        max_iterations=config.agents.defaults.max_tool_iterations,
+        context_window_tokens=config.agents.defaults.context_window_tokens,
+        brave_api_key=config.tools.web.search.api_key or None,
+        web_proxy=config.tools.web.proxy or None,
+        exec_config=config.tools.exec,
+        cron_service=cron,
+        restrict_to_workspace=config.tools.restrict_to_workspace,
+        mcp_servers=config.tools.mcp_servers,
+        channels_config=config.channels,
+    )
+
+    async def run():
+        try:
+            # Start agent loop
+            agent_task = asyncio.create_task(agent_loop.run())
+
+            # Start API server
+            api_server = await start_api_server(agent_loop, bus, port)
+
+            console.print(f"[green]✓[/green] API Server started on http://127.0.0.1:{port}")
+            console.print("[dim]Press Ctrl+C to stop[/dim]\n")
+
+            # Keep running
+            while True:
+                await asyncio.sleep(1)
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Shutting down...[/yellow]")
+        finally:
+            await api_server.stop()
+            agent_loop.stop()
+            await agent_task
+            await agent_loop.close_mcp()
+            console.print("[green]✓[/green] Server stopped")
+
+    asyncio.run(run())
 
 
 @app.command()
