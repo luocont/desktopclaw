@@ -27,9 +27,9 @@ def load_channel_class(module_name: str) -> type[BaseChannel]:
     """Import *module_name* and return the first BaseChannel subclass found."""
     from desktopclaw.channels.base import BaseChannel as _Base
 
-    mod = importlib.import_module(f"nanobot.channels.{module_name}")
+    mod = importlib.import_module(f"desktopclaw.channels.{module_name}")
     for attr in dir(mod):
         obj = getattr(mod, attr)
         if isinstance(obj, type) and issubclass(obj, _Base) and obj is not _Base:
             return obj
-    raise ImportError(f"No BaseChannel subclass in nanobot.channels.{module_name}")
+    raise ImportError(f"No BaseChannel subclass in desktopclaw.channels.{module_name}")

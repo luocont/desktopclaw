@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "main": "electron/main.js",
   "scripts": {
-    "electron:dev": "start vite dev --host & wait-on http://localhost:5173 && electron .",
-    "dev": "vite dev",
+    "electron:dev": "node electron-dev.js",
+    "dev": "vite dev --host",
     "build": "vite build",
     "electron:build": "vite build && electron-builder"
   },
@@ -14,6 +14,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
+    "concurrently": "^9.2.1",
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1",
     "vite": "^5.0.0",

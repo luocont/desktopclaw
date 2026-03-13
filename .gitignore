@@ -1,6 +1,6 @@
 # 1. 忽略 node_modules（核心！包含electron.exe等大文件）
 node_modules/
-
+frontend/node_modules/
 # 2. 忽略构建产物（dist/dist-electron，都是自动生成的）
 dist/
 dist-electron/
