@@ -1,0 +1,34 @@
+# 1. 忽略 node_modules（核心！包含electron.exe等大文件）
+node_modules/
+
+# 2. 忽略构建产物（dist/dist-electron，都是自动生成的）
+dist/
+dist-electron/
+
+# 3. 忽略npm缓存/日志
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# 4. 忽略环境变量文件
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# 5. 忽略Electron相关缓存
+electron-builder-cache/
+electron-builder-effective-config.yaml
+
+# 6. 忽略编辑器/系统文件
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
