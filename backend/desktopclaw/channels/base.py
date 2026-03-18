@@ -35,6 +35,11 @@ class BaseChannel(ABC):
         self.config = config
         self.bus = bus
         self._running = False
+        self._inbound_callback: callable | None = None
+
+    def set_inbound_callback(self, callback: callable | None) -> None:
+        """Set a callback to be called when an inbound message is received."""
+        self._inbound_callback = callback
 
     async def transcribe_audio(self, file_path: str | Path) -> str:
         """Transcribe an audio file via Groq Whisper. Returns empty string on failure."""
@@ -125,6 +130,12 @@ class BaseChannel(ABC):
             metadata=metadata or {},
             session_key_override=session_key,
         )
+
+        if self._inbound_callback:
+            try:
+                self._inbound_callback(msg)
+            except Exception as e:
+                logger.warning("{}: inbound callback error: {}", self.name, e)
 
         await self.bus.publish_inbound(msg)
 
