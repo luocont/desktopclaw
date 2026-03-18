@@ -27,8 +27,20 @@ class ChannelManager:
         self.bus = bus
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
+        self._inbound_callback: callable | None = None
+        self._outbound_callback: callable | None = None
 
         self._init_channels()
+
+    def set_inbound_callback(self, callback: callable | None) -> None:
+        """Set a callback to be called when any channel receives an inbound message."""
+        self._inbound_callback = callback
+        for channel in self.channels.values():
+            channel.set_inbound_callback(callback)
+
+    def set_outbound_callback(self, callback: callable | None) -> None:
+        """Set a callback to be called when any channel sends an outbound message."""
+        self._outbound_callback = callback
 
     def _init_channels(self) -> None:
         """Initialize channels discovered via pkgutil scan."""
@@ -120,6 +132,12 @@ class ChannelManager:
                         continue
                     if not msg.metadata.get("_tool_hint") and not self.config.channels.send_progress:
                         continue
+
+                if self._outbound_callback:
+                    try:
+                        self._outbound_callback(msg)
+                    except Exception as e:
+                        logger.warning("Outbound callback error: {}", e)
 
                 channel = self.channels.get(msg.channel)
                 if channel:

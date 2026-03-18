@@ -520,9 +520,17 @@ def gateway(
             await cron.start()
             await heartbeat.start()
 
-            # Start HTTP API server
+            # Start HTTP API server (before channels so we can register callback)
             api_server = await start_api_server(agent, bus, port)
             console.print(f"[green]✓[/green] HTTP API server started on port {port}")
+
+            # Set the API server's inbound/outbound broadcaster as callback for channels
+            if hasattr(api_server, 'broadcast_feishu_inbound'):
+                channels.set_inbound_callback(api_server.broadcast_feishu_inbound)
+                console.print(f"[green]✓[/green] Feishu inbound callback registered")
+            if hasattr(api_server, 'broadcast_feishu_outbound'):
+                channels.set_outbound_callback(api_server.broadcast_feishu_outbound)
+                console.print(f"[green]✓[/green] Feishu outbound callback registered")
 
             await asyncio.gather(
                 agent.run(),

@@ -16,6 +16,8 @@ class APIServer:
         self.bus = bus
         self.port = port
         self.server = None
+        self._feishu_sse_clients: list[asyncio.StreamWriter] = []
+        self._feishu_sse_lock = asyncio.Lock()
 
     async def handle_request(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handle an incoming HTTP request."""
@@ -72,6 +74,11 @@ class APIServer:
             # Handle POST /chat
             if method == 'POST' and path == '/chat':
                 await self._handle_chat_request(reader, writer, headers)
+                return
+
+            # Handle SSE endpoint for Feishu events
+            if method == 'GET' and path == '/feishu/events':
+                await self._handle_feishu_sse(writer)
                 return
 
             # 404 Not Found
@@ -183,9 +190,95 @@ class APIServer:
 
         print(f"[API] SSE stream completed")
 
+    async def _handle_feishu_sse(self, writer: asyncio.StreamWriter):
+        """Handle SSE connection for Feishu event subscription."""
+        print(f"[API] New Feishu SSE client connected")
+
+        sse_headers = (
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/event-stream\r\n"
+            "Cache-Control: no-cache\r\n"
+            "Connection: keep-alive\r\n"
+            "Access-Control-Allow-Origin: *\r\n"
+            "\r\n"
+        )
+        writer.write(sse_headers.encode())
+        await writer.drain()
+
+        async with self._feishu_sse_lock:
+            self._feishu_sse_clients.append(writer)
+
+        try:
+            while True:
+                await asyncio.sleep(30)
+                heartbeat = f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                try:
+                    writer.write(heartbeat.encode())
+                    await writer.drain()
+                except (ConnectionResetError, BrokenPipeError):
+                    break
+        except asyncio.CancelledError:
+            pass
+        finally:
+            async with self._feishu_sse_lock:
+                if writer in self._feishu_sse_clients:
+                    self._feishu_sse_clients.remove(writer)
+            print(f"[API] Feishu SSE client disconnected")
+
+    async def broadcast_feishu_event(self, event_type: str, data: dict):
+        """Broadcast a Feishu event to all connected SSE clients."""
+        event = {
+            'type': event_type,
+            **data
+        }
+        event_data = f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        async with self._feishu_sse_lock:
+            disconnected = []
+            for client in self._feishu_sse_clients:
+                try:
+                    client.write(event_data.encode())
+                    await client.drain()
+                except (ConnectionResetError, BrokenPipeError):
+                    disconnected.append(client)
+            for client in disconnected:
+                if client in self._feishu_sse_clients:
+                    self._feishu_sse_clients.remove(client)
+
+    def broadcast_feishu_inbound(self, msg):
+        """Broadcast an inbound Feishu message (sync callback from channel)."""
+        print(f"[API] broadcast_feishu_inbound called: {msg.content[:50]}...")
+        asyncio.create_task(self._broadcast_feishu_inbound_async(msg))
+
+    async def _broadcast_feishu_inbound_async(self, msg):
+        """Async helper to broadcast inbound message."""
+        try:
+            print(f"[API] Broadcasting inbound to {len(self._feishu_sse_clients)} clients")
+            await self.broadcast_feishu_event('inbound', {
+                'content': msg.content,
+                'sender_id': msg.sender_id,
+                'chat_id': msg.chat_id,
+            })
+        except Exception as e:
+            print(f"[API] Error broadcasting feishu inbound: {e}")
+
+    def broadcast_feishu_outbound(self, msg):
+        """Broadcast an outbound Feishu message (sync callback from channel manager)."""
+        print(f"[API] broadcast_feishu_outbound called: {msg.content[:50]}...")
+        asyncio.create_task(self._broadcast_feishu_outbound_async(msg))
+
+    async def _broadcast_feishu_outbound_async(self, msg):
+        """Async helper to broadcast outbound message."""
+        try:
+            print(f"[API] Broadcasting outbound to {len(self._feishu_sse_clients)} clients")
+            await self.broadcast_feishu_event('outbound', {
+                'content': msg.content,
+                'chat_id': msg.chat_id,
+            })
+        except Exception as e:
+            print(f"[API] Error broadcasting feishu outbound: {e}")
+
     async def _handle_chat_request(self, reader, writer, headers):
         """Handle chat request with streaming tool call updates."""
-        # Check if client accepts streaming
         accept_header = headers.get('accept', '')
         wants_streaming = 'text/event-stream' in accept_header
 
@@ -208,18 +301,17 @@ class APIServer:
             return
 
         message = data.get('message', '')
-        print(f"[API] Processing message: {message[:50]}...")
+        channel = data.get('channel', 'api')
+        print(f"[API] Processing message: {message[:50]}... (channel={channel})")
 
         if wants_streaming:
-            # Handle streaming response with SSE
-            await self._send_streaming_response(writer, message)
+            await self._send_streaming_response(writer, message, channel)
         else:
-            # Handle non-streaming response
-            await self._send_standard_response(writer, message)
+            await self._send_standard_response(writer, message, channel)
 
-    async def _send_streaming_response(self, writer, message):
+    async def _send_streaming_response(self, writer, message, channel='api'):
         """Send streaming response with tool call updates via SSE."""
-        print(f"[API] Streaming response started for: {message[:50]}...")
+        print(f"[API] Streaming response started for: {message[:50]}... (channel={channel})")
 
         # Send SSE headers
         sse_headers = (
@@ -261,8 +353,8 @@ class APIServer:
             try:
                 response = await self.agent.process_direct(
                     message,
-                    session_key="api:frontend",
-                    channel="api",
+                    session_key=f"api:frontend:{channel}",
+                    channel=channel,
                     chat_id="frontend",
                     on_progress=collect_progress
                 )
@@ -295,10 +387,10 @@ class APIServer:
 
         print(f"[API] Streaming response completed")
 
-    async def _send_standard_response(self, writer, message):
+    async def _send_standard_response(self, writer, message, channel='api'):
         """Send non-streaming standard response."""
         try:
-            response = await self.process_message(message)
+            response = await self.process_message(message, channel)
             result = {'success': True, 'response': response}
             response_body = json.dumps(result, ensure_ascii=False)
             print(f"[API] Response sent successful"  )
@@ -348,19 +440,18 @@ class APIServer:
         if self.server:
             self.server.close()
             await self.server.wait_closed()
-            print("API Server stopped")
+        print("API Server stopped")
 
-    async def process_message(self, message: str) -> str:
+    async def process_message(self, message: str, channel: str = 'api') -> str:
         """Process a message through the agent and return the response."""
         response_future = asyncio.Future()
 
-        # Create a temporary handler for the response
         async def handle_response():
             try:
                 response = await self.agent.process_direct(
                     message,
-                    session_key="api:frontend",
-                    channel="api",
+                    session_key=f"api:frontend:{channel}",
+                    channel=channel,
                     chat_id="frontend",
                 )
                 if not response_future.done():
@@ -369,10 +460,8 @@ class APIServer:
                 if not response_future.done():
                     response_future.set_exception(e)
 
-        # Run the handler
         asyncio.create_task(handle_response())
 
-        # Wait for response with timeout (10 minutes for long-running tasks)
         try:
             response = await asyncio.wait_for(response_future, timeout=600.0)
             return response
@@ -380,8 +469,10 @@ class APIServer:
             return "请求超时，请稍后重试。(请求处理时间超过10分钟)"
 
 
-async def start_api_server(agent, bus, port: int = 3000):
+async def start_api_server(agent, bus, port: int = 3000, channel_manager=None):
     """Start the API server with the given agent and message bus."""
     server = APIServer(agent, bus, port)
+    if channel_manager:
+        channel_manager.set_inbound_callback(server.broadcast_feishu_inbound)
     await server.start()
     return server

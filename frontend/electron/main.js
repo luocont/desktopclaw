@@ -1,10 +1,13 @@
-const {app,BrowserWindow,ipcMain} = require('electron')
+const {app,BrowserWindow,ipcMain,Session} = require('electron')
 const path = require('path')
-const http = require('http')
+const http = require('electron').net || require('http')
 
 // 检测是否在开发模式：检查是否有 VITE 开发服务器运行，或通过环境变量
 const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev')
+
 let win
+let feishuSSEController = null
+
 const createWindow = () => {
     if(win)return
         win = new BrowserWindow({
@@ -83,4 +86,80 @@ ipcMain.handle('send-message', async (event, message) => {
         req.write(data);
         req.end();
     });
+})
+
+// IPC handler for connecting to Feishu SSE
+ipcMain.handle('connect-feishu-sse', async (event) => {
+    // 断开之前的连接
+    if (feishuSSEController) {
+        feishuSSEController.abort()
+        feishuSSEController = null
+    }
+
+    return new Promise((resolve, reject) => {
+        feishuSSEController = new AbortController()
+        
+        const options = {
+            hostname: '127.0.0.1',
+            port: 3000,
+            path: '/feishu/events',
+            method: 'GET',
+            signal: feishuSSEController.signal
+        }
+
+        const req = http.request(options, (res) => {
+            console.log('[Electron] Feishu SSE connected')
+            resolve({ success: true })
+
+            let buffer = ''
+            res.on('data', (chunk) => {
+                buffer += chunk.toString()
+                const lines = buffer.split('\n\n')
+                buffer = lines.pop() || ''
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.slice(6))
+                            // 发送事件到渲染进程
+                            if (win && !win.isDestroyed()) {
+                                win.webContents.send('feishu-event', data)
+                            }
+                        } catch (e) {
+                            console.error('[Electron] Failed to parse SSE data:', e)
+                        }
+                    }
+                }
+            })
+
+            res.on('end', () => {
+                console.log('[Electron] Feishu SSE connection ended')
+                feishuSSEController = null
+            })
+
+            res.on('error', (error) => {
+                console.error('[Electron] Feishu SSE error:', error)
+                feishuSSEController = null
+            })
+        })
+
+        req.on('error', (error) => {
+            if (error.name !== 'AbortError') {
+                console.error('[Electron] Feishu SSE request error:', error)
+                reject(error)
+            }
+        })
+
+        req.end()
+    })
+})
+
+// IPC handler for disconnecting Feishu SSE
+ipcMain.handle('disconnect-feishu-sse', async (event) => {
+    if (feishuSSEController) {
+        feishuSSEController.abort()
+        feishuSSEController = null
+        console.log('[Electron] Feishu SSE disconnected')
+    }
+    return { success: true }
 })
