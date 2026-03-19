@@ -2,10 +2,13 @@
 
 import asyncio
 import json
+import mimetypes
+from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
 from desktopclaw.bus.events import InboundMessage
+from desktopclaw.config.paths import get_media_dir
 
 
 class APIServer:
@@ -79,6 +82,11 @@ class APIServer:
             # Handle SSE endpoint for Feishu events
             if method == 'GET' and path == '/feishu/events':
                 await self._handle_feishu_sse(writer)
+                return
+
+            # Handle media files
+            if method == 'GET' and path.startswith('/media/'):
+                await self._handle_media_request(writer, path[7:])
                 return
 
             # 404 Not Found
@@ -190,6 +198,66 @@ class APIServer:
 
         print(f"[API] SSE stream completed")
 
+    async def _handle_media_request(self, writer: asyncio.StreamWriter, file_path: str):
+        """Handle media file request."""
+        try:
+            # Get media directory
+            media_dir = get_media_dir("feishu")
+            full_path = media_dir / file_path
+            
+            print(f"[API] Media request: {file_path}")
+            print(f"[API] Media dir: {media_dir}")
+            print(f"[API] Full path: {full_path}")
+            print(f"[API] File exists: {full_path.exists()}")
+
+            # Security check: ensure file is within media directory
+            try:
+                full_path.resolve().relative_to(media_dir.resolve())
+            except ValueError:
+                print(f"[API] Access denied: {file_path}")
+                response = self._http_response(403, json.dumps({'error': 'Access denied'}))
+                writer.write(response.encode())
+                await writer.drain()
+                return
+
+            if not full_path.exists():
+                print(f"[API] File not found: {full_path}")
+                response = self._http_response(404, json.dumps({'error': 'File not found'}))
+                writer.write(response.encode())
+                await writer.drain()
+                return
+
+            # Guess content type
+            content_type, _ = mimetypes.guess_type(str(full_path))
+            if not content_type:
+                content_type = 'application/octet-stream'
+            
+            # Fix for opus files
+            if full_path.suffix.lower() == '.opus':
+                content_type = 'audio/ogg; codecs=opus'
+
+            # Read file
+            data = full_path.read_bytes()
+
+            # Send response
+            headers = (
+                f"HTTP/1.1 200 OK\r\n"
+                f"Content-Type: {content_type}\r\n"
+                f"Content-Length: {len(data)}\r\n"
+                f"Access-Control-Allow-Origin: *\r\n"
+                f"\r\n"
+            )
+            writer.write(headers.encode())
+            writer.write(data)
+            await writer.drain()
+            print(f"[API] Media file served: {file_path}")
+
+        except Exception as e:
+            print(f"[API] Error serving media file: {e}")
+            response = self._http_response(500, json.dumps({'error': str(e)}))
+            writer.write(response.encode())
+            await writer.drain()
+
     async def _handle_feishu_sse(self, writer: asyncio.StreamWriter):
         """Handle SSE connection for Feishu event subscription."""
         print(f"[API] New Feishu SSE client connected")
@@ -255,11 +323,19 @@ class APIServer:
         """Async helper to broadcast inbound message."""
         try:
             print(f"[API] Broadcasting inbound to {len(self._feishu_sse_clients)} clients")
-            await self.broadcast_feishu_event('inbound', {
+            print(f"[API] msg.media: {msg.media}")
+            print(f"[API] msg.metadata: {msg.metadata}")
+            event_data = {
                 'content': msg.content,
                 'sender_id': msg.sender_id,
                 'chat_id': msg.chat_id,
-            })
+            }
+            if msg.media:
+                event_data['media'] = msg.media
+            if msg.metadata:
+                event_data['metadata'] = msg.metadata
+            print(f"[API] event_data: {event_data}")
+            await self.broadcast_feishu_event('inbound', event_data)
         except Exception as e:
             print(f"[API] Error broadcasting feishu inbound: {e}")
 

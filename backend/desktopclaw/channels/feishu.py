@@ -1032,10 +1032,11 @@ class FeishuChannel(BaseChannel):
                 if file_path:
                     media_paths.append(file_path)
 
+                audio_transcription = None
                 if msg_type == "audio" and file_path:
-                    transcription = await self.transcribe_audio(file_path)
-                    if transcription:
-                        content_text = f"[transcription: {transcription}]"
+                    audio_transcription = await self.transcribe_audio(file_path)
+                    if audio_transcription:
+                        content_text = f"[audio: {Path(file_path).name}]"
 
                 content_parts.append(content_text)
 
@@ -1055,16 +1056,24 @@ class FeishuChannel(BaseChannel):
 
             # Forward to message bus
             reply_to = chat_id if chat_type == "group" else sender_id
+            msg_metadata = {
+                "message_id": message_id,
+                "chat_type": chat_type,
+                "msg_type": msg_type,
+            }
+            # Check if audio_transcription exists (only for audio messages)
+            if 'audio_transcription' in locals() and audio_transcription:
+                msg_metadata["audio_transcription"] = audio_transcription
+                content = f"{content}\n[语音内容: {audio_transcription}]"
+            
+            logger.info("[Feishu] Sending message with media_paths: {}", media_paths)
+            
             await self._handle_message(
                 sender_id=sender_id,
                 chat_id=reply_to,
                 content=content,
                 media=media_paths,
-                metadata={
-                    "message_id": message_id,
-                    "chat_type": chat_type,
-                    "msg_type": msg_type,
-                }
+                metadata=msg_metadata
             )
 
         except Exception as e:
