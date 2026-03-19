@@ -634,6 +634,117 @@ test_smtp_connection('smtp.gmail.com', 587)
 
 ---
 
+## GitHub Trending Email
+
+一键发送 GitHub 热门项目邮件，包含完整的获取、格式化和发送流程。
+
+### 完整实现
+
+```python
+import smtplib
+from email.mime.text import MIMEText
+import urllib.request
+import json
+from datetime import datetime
+
+def send_github_trending_email(recipient_email, sender_email='1163056695@qq.com', password='mikbgnotlrczgjbd'):
+    """
+    获取 GitHub 热门项目并通过邮件发送
+
+    Args:
+        recipient_email: 收件人邮箱
+        sender_email: 发件人邮箱 (默认: 1163056695@qq.com)
+        password: 邮箱授权码 (默认已配置)
+
+    Returns:
+        bool: 是否发送成功
+    """
+
+    # Step 1: 获取 GitHub 热门项目
+    try:
+        print("正在获取 GitHub 热门项目...")
+        url = "https://api.github.com/search/repositories?q=stars:>1000&sort=stars&order=desc&per_page=15"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read().decode())
+    except Exception as e:
+        print(f"获取 GitHub 数据失败: {e}")
+        return False
+
+    # Step 2: 格式化邮件内容
+    today = datetime.now().strftime('%Y年%m月%d日')
+    body_lines = [
+        f"今天是 {today}，以下是 GitHub 热门项目 (按星标数排序):",
+        "=" * 70,
+        ""
+    ]
+
+    if 'items' in data:
+        for i, repo in enumerate(data['items'][:15], 1):
+            body_lines.append(f"{i}. {repo['full_name']}")
+            body_lines.append(f"   ⭐ Stars: {repo['stargazers_count']:,} | 🍴 Forks: {repo['forks_count']:,}")
+            desc = repo['description'] or '暂无描述'
+            body_lines.append(f"   📝 描述: {desc}")
+            body_lines.append(f"   🔗 链接: {repo['html_url']}")
+            body_lines.append("")
+
+    body_lines.append("=" * 70)
+    body_lines.append(f"此邮件由 nanobot 🐈 自动发送")
+    body_lines.append(f"发送时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    body_lines.append("数据来源：GitHub API (按星标数排序)")
+
+    body = '\n'.join(body_lines)
+
+    # Step 3: 发送邮件
+    try:
+        print("正在发送邮件...")
+        subject = f'GitHub 今日热门项目 - {today}'
+
+        msg = MIMEText(body, 'plain', 'utf-8')
+        msg['From'] = sender_email
+        msg['To'] = recipient_email
+        msg['Subject'] = subject
+
+        with smtplib.SMTP('smtp.qq.com', 587) as server:
+            server.starttls()
+            server.login(sender_email, password)
+            server.send_message(msg)
+
+        print("邮件发送成功！")
+        return True
+    except Exception as e:
+        print(f"邮件发送失败: {e}")
+        return False
+
+# 使用示例
+send_github_trending_email('1163056695@qq.com')
+```
+
+### 简化版（默认配置）
+
+```python
+def send_trending_quick(recipient):
+    """使用默认配置发送 GitHub Trending"""
+    # 已配置邮箱: 1163056695@qq.com
+    # 授权码: mikbgnotlrczgjbd
+    send_github_trending_email(recipient)
+
+# 一键发送
+send_trending_quick('your_email@qq.com')
+```
+
+### 自定义邮箱配置
+
+```python
+send_github_trending_email(
+    recipient_email='your_email@example.com',
+    sender_email='your_sender@qq.com',
+    password='your_authorization_code'
+)
+```
+
+---
+
 **Security Notes**:
 - Never commit email passwords to version control
 - Use environment variables or secret managers

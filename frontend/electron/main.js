@@ -1,6 +1,6 @@
-const {app,BrowserWindow,ipcMain,Session} = require('electron')
+const {app,BrowserWindow,ipcMain} = require('electron')
 const path = require('path')
-const http = require('electron').net || require('http')
+const http = require('http')
 
 // 检测是否在开发模式：检查是否有 VITE 开发服务器运行，或通过环境变量
 const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev')
@@ -47,9 +47,9 @@ app.on('activate',()=>{
 })
 
 // IPC handler for sending messages to backend
-ipcMain.handle('send-message', async (event, message) => {
+ipcMain.handle('send-message', async (event, message, channel = 'feishu') => {
     return new Promise((resolve, reject) => {
-        const data = JSON.stringify({ message });
+        const data = JSON.stringify({ message, channel });
 
         const options = {
             hostname: '127.0.0.1',
