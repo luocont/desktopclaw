@@ -233,12 +233,14 @@ class APIServer:
         }
         event_data = f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         async with self._feishu_sse_lock:
+            print(f"[API] Broadcasting {event_type} to {len(self._feishu_sse_clients)} clients: {str(data)[:100]}")
             disconnected = []
             for client in self._feishu_sse_clients:
                 try:
                     client.write(event_data.encode())
                     await client.drain()
-                except (ConnectionResetError, BrokenPipeError):
+                except (ConnectionResetError, BrokenPipeError) as e:
+                    print(f"[API] Client write error: {e}")
                     disconnected.append(client)
             for client in disconnected:
                 if client in self._feishu_sse_clients:
