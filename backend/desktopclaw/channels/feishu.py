@@ -786,6 +786,85 @@ class FeishuChannel(BaseChannel):
 
         return None, f"[{msg_type}: download failed]"
 
+    async def transcribe_audio(self, file_path: str) -> str | None:
+        """Transcribe audio file using Alibaba Cloud ASR via dashscope real-time API."""
+        if not self.config.asr_enabled:
+            return None
+
+        api_key = self.config.asr_api_key
+        if not api_key:
+            logger.warning("ASR enabled but no API key configured")
+            return None
+
+        try:
+            import dashscope
+            from dashscope.audio.asr import Recognition, RecognitionCallback
+            import time
+
+            dashscope.api_key = api_key
+            dashscope.base_websocket_api_url = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference'
+
+            opus_path = Path(file_path)
+            if not opus_path.exists():
+                logger.error("Audio file not found: {}", file_path)
+                return None
+
+            full_text = []
+
+            class Callback(RecognitionCallback):
+                def on_complete(self) -> None:
+                    pass
+
+                def on_error(self, result) -> None:
+                    logger.error("ASR recognition error: {}", result.message)
+
+                def on_event(self, result) -> None:
+                    sentence = result.get_sentence()
+                    if sentence and 'text' in sentence:
+                        text = sentence['text']
+                        full_text.append(text)
+
+            callback = Callback()
+
+            loop = asyncio.get_running_loop()
+
+            def run_recognition():
+                try:
+                    recognition = Recognition(
+                        model='fun-asr-realtime',
+                        format='opus',
+                        sample_rate=16000,
+                        callback=callback
+                    )
+
+                    recognition.start()
+
+                    with open(str(opus_path), 'rb') as f:
+                        chunk_size = 3200
+                        while True:
+                            data = f.read(chunk_size)
+                            if not data:
+                                break
+                            recognition.send_audio_frame(data)
+                            time.sleep(0.1)
+
+                    recognition.stop()
+                except Exception as e:
+                    logger.exception("Recognition error: {}", e)
+
+            await loop.run_in_executor(None, run_recognition)
+
+            if full_text:
+                transcription = "".join(full_text)
+                logger.info("ASR transcription: {}", transcription)
+                return transcription
+
+            return None
+
+        except Exception as e:
+            logger.exception("Error transcribing audio: {}", e)
+            return None
+
     def _send_message_sync(self, receive_id_type: str, receive_id: str, msg_type: str, content: str) -> bool:
         """Send a single message (text/image/file/interactive) synchronously."""
         from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
