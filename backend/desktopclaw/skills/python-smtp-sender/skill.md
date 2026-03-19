@@ -33,7 +33,7 @@ license: MIT
 ## Default Configuration
 
 ```QQ Mail (已配置)
-- Email: 1163056695@qq.com
+- Email: 3794982701@qq.com
 - SMTP: smtp.qq.com:587 (TLS)
 ```
 
@@ -45,8 +45,8 @@ from email.mime.text import MIMEText
 
 def send_email_quick(recipient, subject, body):
     # 默认配置
-    sender_email = "1163056695@qq.com"
-    password = "xdzeokkizwbvbafj"
+    sender_email = "3794982701@qq.com"
+    password = "imceiluvpagyccig"
 
     msg = MIMEText(body, 'plain')
     msg['From'] = sender_email
