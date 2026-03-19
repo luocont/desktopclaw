@@ -24,6 +24,17 @@ const createWindow = () => {
         }
         //alwaysOnTop: true
     })
+    
+    // 修改 CSP 以允许加载本地媒体文件
+    win.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+        callback({
+            responseHeaders: {
+                ...details.responseHeaders,
+                'Content-Security-Policy': ["default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; media-src 'self' http://127.0.0.1:3000 https://127.0.0.1:3000; connect-src 'self' http://127.0.0.1:3000 ws://localhost:5173;"]
+            }
+        })
+    })
+    
     //win.loadFile('../index.html')
     if (isDev) {
         win.loadURL('http://localhost:5173')

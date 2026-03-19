@@ -24,6 +24,15 @@
               <span class="thinking-dots">{{ msg.content }}</span>
             </div>
           </template>
+          <template v-else-if="msg.audioPath">
+            <div class="audio-message">
+              <span class="audio-icon">🎤</span>
+              <audio controls class="audio-player">
+                <source :src="msg.audioPath" type="audio/ogg; codecs=opus">
+                您的浏览器不支持音频播放
+              </audio>
+            </div>
+          </template>
           <template v-else>{{ msg.content }}</template>
         </div>
       </div>
@@ -163,10 +172,23 @@ const handleFeishuEvent = async (data) => {
 
   if (data.type === "inbound") {
     console.log("添加用户消息到列表");
-    messages.value.push({
+    console.log("data.metadata:", data.metadata);
+    console.log("data.media:", data.media);
+    const msgData = {
       role: "user",
       content: data.content || "(空消息)",
-    });
+    };
+    if (data.metadata && data.metadata.msg_type === "audio" && data.media && data.media.length > 0) {
+      const fileName = data.media[0].split('\\').pop().split('/').pop();
+      msgData.audioPath = `${API_URL}/media/${fileName}`;
+      console.log("音频路径:", msgData.audioPath);
+      console.log("音频文件名:", fileName);
+    } else {
+      console.log("不是音频消息或缺少数据");
+      console.log("metadata?.msg_type:", data.metadata?.msg_type);
+      console.log("media?.length:", data.media?.length);
+    }
+    messages.value.push(msgData);
     await nextTick();
     scrollToBottom();
   }
@@ -361,6 +383,22 @@ const scrollToBottom = () => {
 .thinking-dots {
   font-style: italic;
   color: #666;
+}
+
+/* 音频消息样式 */
+.audio-message {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.audio-icon {
+  font-size: 20px;
+}
+
+.audio-player {
+  height: 36px;
+  max-width: 300px;
 }
 
 .input-area {
