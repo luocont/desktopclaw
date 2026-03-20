@@ -44,15 +44,26 @@
         v-model="inputValue"
         @keyup.enter="sendMessage"
         placeholder="请输入要发送的内容..."
-        :disabled="loading"
+        :disabled="loading || isRecording"
         class="input-field"
       />
       <button
         @click="sendMessage"
-        :disabled="loading || !inputValue.trim()"
+        :disabled="loading || !inputValue.trim() || isRecording"
         class="send-button"
       >
         {{ loading ? "处理中..." : "发送" }}
+      </button>
+      <button
+        @mousedown="startRecording"
+        @mouseup="stopRecording"
+        @mouseleave="stopRecording"
+        @touchstart.prevent="startRecording"
+        @touchend.prevent="stopRecording"
+        :disabled="loading"
+        :class="['record-button', { 'recording': isRecording }]"
+      >
+        {{ isRecording ? "🔴 录音中..." : "🎤 按住说话" }}
       </button>
     </div>
   </div>
@@ -76,6 +87,11 @@ const eventSource = ref(null);
 const feishuConnected = ref(false);
 // 已处理的消息ID集合（用于去重）
 const processedMsgIds = new Set();
+// 录音状态
+const isRecording = ref(false);
+// 录音相关
+const mediaRecorder = ref(null);
+const audioChunks = ref([]);
 
 // API 地址（后端地址）
 const API_URL = "http://127.0.0.1:3000";
@@ -285,6 +301,101 @@ const scrollToBottom = () => {
     messagesRef.value.scrollTop = messagesRef.value.scrollHeight;
   }
 };
+
+// 开始录音
+const startRecording = async () => {
+  if (isRecording.value || loading.value) return;
+  
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder.value = new MediaRecorder(stream);
+    audioChunks.value = [];
+    
+    mediaRecorder.value.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        audioChunks.value.push(event.data);
+      }
+    };
+    
+    mediaRecorder.value.onstop = async () => {
+      const audioBlob = new Blob(audioChunks.value, { type: 'audio/webm' });
+      await sendAudioMessage(audioBlob);
+      
+      // 停止所有轨道
+      stream.getTracks().forEach(track => track.stop());
+    };
+    
+    mediaRecorder.value.start();
+    isRecording.value = true;
+    console.log("开始录音");
+  } catch (error) {
+    console.error("录音失败:", error);
+    alert("无法访问麦克风，请检查权限设置");
+  }
+};
+
+// 停止录音
+const stopRecording = () => {
+  if (!isRecording.value || !mediaRecorder.value) return;
+  
+  mediaRecorder.value.stop();
+  isRecording.value = false;
+  console.log("停止录音");
+};
+
+// 发送音频消息
+const sendAudioMessage = async (audioBlob) => {
+  loading.value = true;
+  
+  // 添加用户音频消息到列表
+  const audioUrl = URL.createObjectURL(audioBlob);
+  messages.value.push({
+    role: "user",
+    audioPath: audioUrl,
+    isLocalAudio: true,
+  });
+  await nextTick();
+  scrollToBottom();
+  
+  try {
+    // 创建 FormData 发送音频
+    const formData = new FormData();
+    formData.append('audio', audioBlob, 'recording.webm');
+    formData.append('channel', 'feishu');
+    
+    // 发送到后端进行识别和处理
+    const response = await axios.post(
+      `${API_URL}/audio/upload`,
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 600000,
+      }
+    );
+    
+    console.log("音频处理响应:", response.data);
+    
+    // 显示 AI 回复
+    if (response.data?.response) {
+      messages.value.push({
+        role: "assistant",
+        content: response.data.response,
+      });
+      await nextTick();
+      scrollToBottom();
+    }
+  } catch (error) {
+    console.error("发送音频失败:", error);
+    messages.value.push({
+      role: "assistant",
+      content: `❌ 音频处理失败: ${error.message || "未知错误"}`,
+    });
+    await nextTick();
+    scrollToBottom();
+  } finally {
+    loading.value = false;
+  }
+};
 </script>
 
 <style scoped>
@@ -443,5 +554,45 @@ const scrollToBottom = () => {
 .send-button:disabled {
   background: #ccc;
   cursor: not-allowed;
+}
+
+/* 录音按钮样式 */
+.record-button {
+  padding: 12px 20px;
+  background: #28a745;
+  color: white;
+  border: none;
+  border-radius: 25px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.3s;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.record-button:hover:not(:disabled) {
+  background: #218838;
+}
+
+.record-button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.record-button.recording {
+  background: #dc3545;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 </style>
