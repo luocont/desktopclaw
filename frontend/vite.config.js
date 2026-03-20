@@ -9,7 +9,7 @@ export default defineConfig({
     host: "0.0.0.0",
     headers: {
       "Content-Security-Policy":
-        "default-src 'self'; connect-src 'self' http://127.0.0.1:3000 http://localhost:3000; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+        "default-src 'self'; connect-src 'self' blob: http://127.0.0.1:3000 http://localhost:3000; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; media-src 'self' blob: http://127.0.0.1:3000; img-src 'self' data: blob:;",
     },
   },
   resolve: {

@@ -89,6 +89,11 @@ class APIServer:
                 await self._handle_media_request(writer, path[7:])
                 return
 
+            # Handle audio upload
+            if method == 'POST' and path == '/audio/upload':
+                await self._handle_audio_upload(reader, writer, headers)
+                return
+
             # 404 Not Found
             print(f"[API] 404 Not Found: {method} {path}")
             response = self._http_response(404, json.dumps({'error': 'Not found'}))
@@ -257,6 +262,192 @@ class APIServer:
             response = self._http_response(500, json.dumps({'error': str(e)}))
             writer.write(response.encode())
             await writer.drain()
+
+    async def _handle_audio_upload(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, headers: dict):
+        """Handle audio file upload from frontend."""
+        try:
+            print("[API] Handling audio upload")
+            
+            # Read content length
+            content_length = int(headers.get('content-length', 0))
+            if content_length == 0:
+                response = self._http_response(400, json.dumps({'error': 'No content'}))
+                writer.write(response.encode())
+                await writer.drain()
+                return
+            
+            # Read the multipart body
+            body = await reader.read(content_length)
+            
+            # Parse multipart form data
+            content_type = headers.get('content-type', '')
+            boundary = None
+            if 'boundary=' in content_type:
+                boundary = content_type.split('boundary=')[1].split(';')[0].strip()
+            
+            if not boundary:
+                response = self._http_response(400, json.dumps({'error': 'Invalid content type'}))
+                writer.write(response.encode())
+                await writer.drain()
+                return
+            
+            # Extract audio data from multipart
+            body_str = body.decode('latin-1')
+            parts = body_str.split('--' + boundary)
+            
+            audio_data = None
+            channel = 'feishu'
+            
+            for part in parts:
+                if 'Content-Disposition' in part and 'filename=' in part:
+                    # Find the actual data after headers
+                    header_end = part.find('\r\n\r\n')
+                    if header_end != -1:
+                        audio_data = part[header_end + 4:].rstrip('\r\n')
+                        break
+                elif 'name="channel"' in part:
+                    header_end = part.find('\r\n\r\n')
+                    if header_end != -1:
+                        channel = part[header_end + 4:].rstrip('\r\n')
+            
+            if not audio_data:
+                response = self._http_response(400, json.dumps({'error': 'No audio data'}))
+                writer.write(response.encode())
+                await writer.drain()
+                return
+            
+            # Save audio file
+            from desktopclaw.config.paths import get_media_dir
+            import uuid
+            media_dir = get_media_dir("frontend")
+            media_dir.mkdir(parents=True, exist_ok=True)
+            
+            file_name = f"{uuid.uuid4().hex}.webm"
+            file_path = media_dir / file_name
+            file_path.write_bytes(audio_data.encode('latin-1'))
+            
+            print(f"[API] Audio saved to: {file_path}")
+            
+            # Transcribe audio using ASR
+            transcription = await self._transcribe_audio(str(file_path))
+            
+            if transcription:
+                print(f"[API] Audio transcription: {transcription}")
+                
+                # Process the transcribed text
+                response_text = await self.agent.process_direct(transcription, channel)
+                
+                result = {
+                    'success': True,
+                    'transcription': transcription,
+                    'response': response_text
+                }
+            else:
+                result = {
+                    'success': False,
+                    'error': 'Failed to transcribe audio'
+                }
+            
+            response = self._http_response(200, json.dumps(result))
+            writer.write(response.encode())
+            await writer.drain()
+            
+        except Exception as e:
+            print(f"[API] Error handling audio upload: {e}")
+            import traceback
+            traceback.print_exc()
+            response = self._http_response(500, json.dumps({'error': str(e)}))
+            writer.write(response.encode())
+            await writer.drain()
+
+    async def _transcribe_audio(self, file_path: str) -> str | None:
+        """Transcribe audio file using ASR file transcription API."""
+        try:
+            from desktopclaw.config import load_config
+            config = load_config()
+            
+            if not config.channels.feishu.asr_enabled:
+                return None
+            
+            api_key = config.channels.feishu.asr_api_key
+            if not api_key:
+                return None
+            
+            import dashscope
+            import time
+            
+            dashscope.api_key = api_key
+            
+            print(f"[ASR] Processing file: {file_path}")
+            
+            # Use MultiModalConversation for ASR with local file
+            try:
+                from pathlib import Path
+                
+                # Convert webm to wav using pydub if available
+                wav_path = Path(file_path).with_suffix('.wav')
+                try:
+                    from pydub import AudioSegment
+                    audio = AudioSegment.from_file(file_path, format="webm")
+                    audio = audio.set_frame_rate(16000).set_channels(1)
+                    audio.export(wav_path, format="wav")
+                    file_path = str(wav_path)
+                    print(f"[ASR] Converted to wav: {file_path}")
+                except Exception as e:
+                    print(f"[ASR] pydub not available, using original file: {e}")
+                
+                # Use MultiModalConversation with local file
+                messages = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"audio": file_path}
+                        ]
+                    }
+                ]
+                
+                response = dashscope.MultiModalConversation.call(
+                    model="qwen3-asr-flash",
+                    messages=messages,
+                    result_format="message",
+                    asr_options={
+                        "enable_lid": True,
+                        "enable_itn": False
+                    }
+                )
+                
+                if response.status_code != 200:
+                    print(f"[ASR] Failed: HTTP {response.status_code}, {response.message}")
+                    return None
+                
+                response_data = response.output if hasattr(response, 'output') else {}
+                if response_data and "choices" in response_data:
+                    choices = response_data["choices"]
+                    if choices and len(choices) > 0:
+                        message_content = choices[0].get("message", {}).get("content", [])
+                        for item in message_content:
+                            if isinstance(item, dict) and "text" in item:
+                                transcription = item["text"]
+                                print(f"[ASR] Result: {transcription}")
+                                # Clean up temp wav file
+                                if wav_path.exists() and str(wav_path) != file_path:
+                                    wav_path.unlink()
+                                return transcription
+                
+                print(f"[ASR] Unexpected response format: {response_data}")
+                return None
+                
+            except Exception as e:
+                print(f"[ASR] Error: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
+            
+        except Exception as e:
+            print(f"Error transcribing audio: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     async def _handle_feishu_sse(self, writer: asyncio.StreamWriter):
         """Handle SSE connection for Feishu event subscription."""
