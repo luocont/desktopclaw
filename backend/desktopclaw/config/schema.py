@@ -216,6 +216,14 @@ class WecomConfig(Base):
     welcome_message: str = ""  # Welcome message for enter_chat event
 
 
+class WeixinConfig(Base):
+    """WeChat (iLink Bot) channel configuration via Node.js bridge."""
+
+    enabled: bool = False
+    bridge_port: int = 3100
+    allow_from: list[str] = Field(default_factory=list)
+
+
 class ChannelsConfig(Base):
     """Configuration for chat channels."""
 
@@ -232,6 +240,7 @@ class ChannelsConfig(Base):
     qq: QQConfig = Field(default_factory=QQConfig)
     matrix: MatrixConfig = Field(default_factory=MatrixConfig)
     wecom: WecomConfig = Field(default_factory=WecomConfig)
+    weixin: WeixinConfig = Field(default_factory=WeixinConfig)
 
 
 class AgentDefaults(Base):
