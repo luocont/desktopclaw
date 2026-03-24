@@ -937,6 +937,83 @@ def channels_login():
         console.print("[red]npm not found. Please install Node.js.[/red]")
 
 
+weixin_app = typer.Typer(help="WeChat (iLink Bot) commands")
+channels_app.add_typer(weixin_app, name="weixin")
+
+
+@weixin_app.command("login")
+def weixin_login():
+    """Scan QR code to connect WeChat account."""
+    import shutil
+    import subprocess
+
+    bridge_dir = Path(__file__).parent.parent.parent / "bridge" / "weixin"
+    if not bridge_dir.exists():
+        console.print("[red]WeChat bridge not found.[/red]")
+        raise typer.Exit(1)
+
+    if not shutil.which("node"):
+        console.print("[red]Node.js not found. Please install Node.js >= 20.[/red]")
+        raise typer.Exit(1)
+
+    node_modules = bridge_dir / "node_modules"
+    if not node_modules.exists():
+        console.print(f"{__logo__} Installing WeChat bridge dependencies...")
+        try:
+            subprocess.run(["npm", "install"], cwd=bridge_dir, check=True)
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]npm install failed: {e}[/red]")
+            raise typer.Exit(1)
+
+    console.print(f"{__logo__} Starting WeChat QR login...")
+    try:
+        subprocess.run(["node", "index.js", "--login"], cwd=bridge_dir, check=True)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Login failed: {e}[/red]")
+        raise typer.Exit(1)
+    except FileNotFoundError:
+        console.print("[red]node not found. Please install Node.js.[/red]")
+        raise typer.Exit(1)
+
+
+@weixin_app.command("start")
+def weixin_start(
+    port: int = typer.Option(3100, "--port", "-p", help="Bridge WebSocket port"),
+):
+    """Start the WeChat bridge service."""
+    import shutil
+    import subprocess
+
+    bridge_dir = Path(__file__).parent.parent.parent / "bridge" / "weixin"
+    if not bridge_dir.exists():
+        console.print("[red]WeChat bridge not found.[/red]")
+        raise typer.Exit(1)
+
+    if not shutil.which("node"):
+        console.print("[red]Node.js not found. Please install Node.js >= 20.[/red]")
+        raise typer.Exit(1)
+
+    node_modules = bridge_dir / "node_modules"
+    if not node_modules.exists():
+        console.print(f"{__logo__} Installing WeChat bridge dependencies...")
+        try:
+            subprocess.run(["npm", "install"], cwd=bridge_dir, check=True)
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]npm install failed: {e}[/red]")
+            raise typer.Exit(1)
+
+    console.print(f"{__logo__} Starting WeChat bridge on port {port}...")
+    env = {**os.environ, "WEIXIN_BRIDGE_PORT": str(port)}
+    try:
+        subprocess.run(["node", "index.js"], cwd=bridge_dir, check=True, env=env)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Bridge failed: {e}[/red]")
+        raise typer.Exit(1)
+    except FileNotFoundError:
+        console.print("[red]node not found. Please install Node.js.[/red]")
+        raise typer.Exit(1)
+
+
 # ============================================================================
 # Status Commands
 # ============================================================================
