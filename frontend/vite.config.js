@@ -17,4 +17,7 @@ export default defineConfig({
       "@": path.join(__dirname, "src"),
     },
   },
+  optimizeDeps: {
+    include: ['pixi.js', 'pixi-live2d-display'],
+  },
 });
