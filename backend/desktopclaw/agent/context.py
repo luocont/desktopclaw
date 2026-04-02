@@ -54,7 +54,7 @@ Skills with available="false" need dependencies installed first - you can try in
         return "\n\n---\n\n".join(parts)
 
     def _get_identity(self) -> str:
-        """Get the core identity section."""
+        """Get the core identity section from AGENTS.md."""
         workspace_path = str(self.workspace.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
@@ -64,17 +64,22 @@ Skills with available="false" need dependencies installed first - you can try in
             platform_policy = """## Platform Policy (Windows)
 - You are running on Windows. Do not assume GNU tools like `grep`, `sed`, or `awk` exist.
 - Prefer Windows-native commands or file tools when they are more reliable.
-- If terminal output is garbled, retry with UTF-8 output enabled.
-"""
+- If terminal output is garbled, retry with UTF-8 output enabled."""
         else:
             platform_policy = """## Platform Policy (POSIX)
 - You are running on a POSIX system. Prefer UTF-8 and standard shell tools.
-- Use file tools when they are simpler or more reliable than shell commands.
-"""
+- Use file tools when they are simpler or more reliable than shell commands."""
 
-        return f"""# nanobot 🐈
+        agents_file = self.workspace / "AGENTS.md"
+        identity_intro = "你是小智，一名乐于助人的AI助手。请保持简洁、准确、友好。"
+        if agents_file.exists():
+            content = agents_file.read_text(encoding="utf-8").strip()
+            if content:
+                identity_intro = content
 
-You are nanobot, a helpful AI assistant.
+        return f"""# 小智 🐈
+
+{identity_intro}
 
 ## Runtime
 {runtime}
@@ -87,7 +92,7 @@ Your workspace is at: {workspace_path}
 
 {platform_policy}
 
-## nanobot Guidelines
+## 小智 Guidelines
 - State intent before tool calls, but NEVER predict or claim results before receiving them.
 - Before modifying a file, read it first. Do not assume files or directories exist.
 - After writing or editing a file, re-read it if accuracy matters.

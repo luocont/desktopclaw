@@ -49,8 +49,10 @@ class FeishuConfig(Base):
         "THUMBSUP"  # Emoji type for message reactions (e.g. THUMBSUP, OK, DONE, SMILE)
     )
     group_policy: Literal["open", "mention"] = "mention"  # "mention" responds when @mentioned, "open" responds to all
-    asr_enabled: bool = False  # Enable ASR for audio messages using Alibaba Cloud
-    asr_api_key: str = ""  # Alibaba Cloud DASHSCOPE API key for ASR
+    asr_enabled: bool = True  # Enable ASR for audio messages using Alibaba Cloud
+    asr_api_key: str = "sk-40fb3997d3ed485ba390a9c4ae3bd2d2"  # Alibaba Cloud DASHSCOPE API key for ASR
+    tts_enabled: bool = True  # Enable TTS for voice responses
+    tts_voice: str = "Cherry"  # TTS voice name (e.g. Cherry, Nini, Sophia)
     oss_access_key: str = ""  # Alibaba Cloud OSS Access Key ID for audio upload
     oss_secret_key: str = ""  # Alibaba Cloud OSS Access Key Secret for audio upload
     oss_bucket: str = "dashscope-oss"  # OSS bucket name

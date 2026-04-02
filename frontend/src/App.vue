@@ -33,6 +33,15 @@
               </audio>
             </div>
           </template>
+          <template v-else-if="msg.ttsAudioPath">
+            <div class="tts-message">
+              <span class="tts-icon">🔊</span>
+              <audio controls class="audio-player">
+                <source :src="msg.ttsAudioPath" type="audio/mpeg">
+                您的浏览器不支持音频播放
+              </audio>
+            </div>
+          </template>
           <template v-else>{{ msg.content }}</template>
         </div>
       </div>
@@ -375,12 +384,19 @@ const sendAudioMessage = async (audioBlob) => {
     
     console.log("音频处理响应:", response.data);
     
-    // 显示 AI 回复
+    // 显示 AI 回复（优先显示 TTS 音频）
     if (response.data?.response) {
-      messages.value.push({
+      const msgData = {
         role: "assistant",
         content: response.data.response,
-      });
+      };
+      
+      // 如果有 TTS 音频，添加 TTS 音频路径
+      if (response.data.ttsAudio) {
+        msgData.ttsAudioPath = response.data.ttsAudio;
+      }
+      
+      messages.value.push(msgData);
       await nextTick();
       scrollToBottom();
     }
@@ -510,6 +526,16 @@ const sendAudioMessage = async (audioBlob) => {
 .audio-player {
   height: 36px;
   max-width: 300px;
+}
+
+.tts-message {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tts-icon {
+  font-size: 20px;
 }
 
 .input-area {
