@@ -1,23 +1,18 @@
-# Long-term Memory
+# 长期记忆
+该文件用于存储跨会话持续保留的重要信息。
 
-This file stores important information that should persist across sessions.
+## 用户信息
+（关于用户的重要信息）
 
-## User Information
+## 偏好设置
+（通过交互逐步了解到的用户偏好）
 
-(Important facts about the user)
+## 项目上下文
+（正在进行的项目相关信息）
 
-## Preferences
+## 重要备注
+（需要牢记的事项）
 
-(User preferences learned over time)
+***
 
-## Project Context
-
-(Information about ongoing projects)
-
-## Important Notes
-
-(Things to remember)
-
----
-
-*This file is automatically updated by nanobot when important information should be remembered.*
+*当有重要信息需要记忆时，deskclaw 会自动更新此文件。*

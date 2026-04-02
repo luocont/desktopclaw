@@ -1,49 +1,41 @@
-# User Profile
+# 用户档案
+用于协助个性化互动的用户信息
 
-Information about the user to help personalize interactions.
+## 基本信息
+- **姓名**：小智
+- **时区**：（你的时区，例如 UTC+8）
+- **语言**：中文
 
-## Basic Information
+## 偏好设置
+### 沟通风格
+- [ ] 轻松随意
+- [ ] 专业严谨
+- [ ] 技术向
+- [ ] 中级
+- [ ] 专家
 
-- **Name**: (your name)
-- **Timezone**: (your timezone, e.g., UTC+8)
-- **Language**: (preferred language)
+### 回复长度
+- [ ] 简洁扼要
+- [ ] 详细讲解
+- [ ] 根据问题自适应
 
-## Preferences
+### 技术水平
+- [ ] 初学者
+- [ ] 中级
+- [ ] 专家
 
-### Communication Style
+## 工作场景
+- **主要角色**：（你的角色，例如开发者、研究员）
+- **主要项目**：（你正在做的项目）
+- **使用工具**：（IDE、编程语言、框架等）
 
-- [ ] Casual
-- [ ] Professional
-- [ ] Technical
+## 感兴趣的主题
+- <br />
+- <br />
+- <br />
 
-### Response Length
-
-- [ ] Brief and concise
-- [ ] Detailed explanations
-- [ ] Adaptive based on question
-
-### Technical Level
-
-- [ ] Beginner
-- [ ] Intermediate
-- [ ] Expert
-
-## Work Context
-
-- **Primary Role**: (your role, e.g., developer, researcher)
-- **Main Projects**: (what you're working on)
-- **Tools You Use**: (IDEs, languages, frameworks)
-
-## Topics of Interest
-
-- 
-- 
-- 
-
-## Special Instructions
-
-(Any specific instructions for how the assistant should behave)
+## 特殊说明
+（你希望助手遵循的任何特定要求）
 
 ---
-
-*Edit this file to customize nanobot's behavior for your needs.*
+*编辑此文件，自定义 小智 的行为以满足你的需求。*

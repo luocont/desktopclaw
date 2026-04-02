@@ -240,6 +240,10 @@ class APIServer:
             # Fix for opus files
             if full_path.suffix.lower() == '.opus':
                 content_type = 'audio/ogg; codecs=opus'
+            
+            # Fix for mp3 files
+            if full_path.suffix.lower() == '.mp3':
+                content_type = 'audio/mpeg'
 
             # Read file
             data = full_path.read_bytes()
@@ -334,13 +338,26 @@ class APIServer:
             if transcription:
                 print(f"[API] Audio transcription: {transcription}")
                 
-                # Process the transcribed text
                 response_text = await self.agent.process_direct(transcription, channel)
+                
+                tts_audio_path = None
+                if response_text:
+                    tts_audio_path = await self._synthesize_speech(response_text)
+                    
+                    # Also send TTS audio to Feishu if enabled
+                    if tts_audio_path and self.channel_manager:
+                        feishu_channel = self.channel_manager.channels.get("feishu")
+                        if feishu_channel and hasattr(feishu_channel, '_synthesize_speech'):
+                            try:
+                                await feishu_channel._send_tts_to_feishu(response_text, tts_audio_path)
+                            except Exception as e:
+                                print(f"[API] Failed to send TTS to Feishu: {e}")
                 
                 result = {
                     'success': True,
                     'transcription': transcription,
-                    'response': response_text
+                    'response': response_text,
+                    'ttsAudio': tts_audio_path,
                 }
             else:
                 result = {
@@ -445,6 +462,86 @@ class APIServer:
             
         except Exception as e:
             print(f"Error transcribing audio: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    async def _synthesize_speech(self, text: str) -> str | None:
+        """Synthesize speech using DashScope TTS API. Returns the path to the generated audio file."""
+        try:
+            from desktopclaw.config import load_config
+            config = load_config()
+
+            if not config.channels.feishu.tts_enabled:
+                return None
+
+            api_key = config.channels.feishu.asr_api_key
+            if not api_key:
+                print("[TTS] No API key configured")
+                return None
+
+            import dashscope
+            dashscope.api_key = api_key
+
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+            voice = config.channels.feishu.tts_voice or "Cherry"
+
+            print(f"[TTS] Synthesizing with voice={voice}, text={text[:50]}...")
+
+            response = dashscope.audio.qwen_tts.SpeechSynthesizer.call(
+                model="qwen3-tts-flash",
+                api_key=api_key,
+                text=text,
+                voice=voice,
+            )
+
+            if response.status_code == 200:
+                audio_dir = get_media_dir("feishu")
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                import uuid
+                file_path = audio_dir / f"{uuid.uuid4().hex}.mp3"
+
+                audio_url = None
+                try:
+                    resp_data = response
+                    if isinstance(response, str):
+                        import json as json_mod
+                        resp_data = json_mod.loads(response)
+
+                    if isinstance(resp_data, dict):
+                        if "output" in resp_data and isinstance(resp_data["output"], dict):
+                            audio_obj = resp_data["output"].get("audio", {})
+                            if isinstance(audio_obj, dict):
+                                audio_url = audio_obj.get("url") or audio_obj.get("data")
+                except (KeyError, TypeError, AttributeError, json_mod.JSONDecodeError):
+                    pass
+
+                if not audio_url:
+                    print(f"[TTS] No audio URL in response: {response}")
+                    return None
+
+                print(f"[TTS] Downloading from: {audio_url[:80]}...")
+                try:
+                    import urllib.request
+                    with urllib.request.urlopen(audio_url, timeout=30) as remote:
+                        audio_bytes = remote.read()
+                except Exception as e:
+                    print(f"[TTS] Download failed: {e}")
+                    return None
+
+                with open(file_path, "wb") as f:
+                    f.write(audio_bytes)
+
+                print(f"[TTS] Saved to: {file_path} ({len(audio_bytes)} bytes)")
+                return f"http://127.0.0.1:{self.port}/media/{file_path.name}"
+            else:
+                print(f"[TTS] Failed: {response.code} {response.message}")
+                return None
+
+        except Exception as e:
+            print(f"[TTS] Error: {e}")
             import traceback
             traceback.print_exc()
             return None

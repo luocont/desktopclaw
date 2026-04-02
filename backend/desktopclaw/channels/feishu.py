@@ -630,7 +630,7 @@ class FeishuChannel(BaseChannel):
     _AUDIO_EXTS = {".opus"}
     _VIDEO_EXTS = {".mp4", ".mov", ".avi"}
     _FILE_TYPE_MAP = {
-        ".opus": "opus", ".mp4": "mp4", ".pdf": "pdf", ".doc": "doc", ".docx": "doc",
+        ".opus": "opus", ".mp4": "mp4", ".mp3": "mp3", ".pdf": "pdf", ".doc": "doc", ".docx": "doc",
         ".xls": "xls", ".xlsx": "xls", ".ppt": "ppt", ".pptx": "ppt",
     }
 
@@ -658,11 +658,11 @@ class FeishuChannel(BaseChannel):
             logger.error("Error uploading image {}: {}", file_path, e)
             return None
 
-    def _upload_file_sync(self, file_path: str) -> str | None:
+    def _upload_file_sync(self, file_path: str, force_type: str | None = None) -> str | None:
         """Upload a file to Feishu and return the file_key."""
         from lark_oapi.api.im.v1 import CreateFileRequest, CreateFileRequestBody
         ext = os.path.splitext(file_path)[1].lower()
-        file_type = self._FILE_TYPE_MAP.get(ext, "stream")
+        file_type = force_type or self._FILE_TYPE_MAP.get(ext, "stream")
         file_name = os.path.basename(file_path)
         try:
             with open(file_path, "rb") as f:
@@ -901,6 +901,13 @@ class FeishuChannel(BaseChannel):
             receive_id_type = "chat_id" if msg.chat_id.startswith("oc_") else "open_id"
             loop = asyncio.get_running_loop()
 
+            # Check if this is a reply to an audio message and TTS is enabled
+            tts_audio_path = None
+            if msg.metadata.get("audio_transcription") and self.config.tts_enabled:
+                tts_audio_path = await self._synthesize_speech(msg.content)
+                if tts_audio_path:
+                    logger.info("[Feishu] TTS audio generated: {}", tts_audio_path)
+
             for file_path in msg.media:
                 if not os.path.isfile(file_path):
                     logger.warning("Media file not found: {}", file_path)
@@ -926,6 +933,15 @@ class FeishuChannel(BaseChannel):
                             None, self._send_message_sync,
                             receive_id_type, msg.chat_id, media_type, json.dumps({"file_key": key}, ensure_ascii=False),
                         )
+
+            # Send TTS audio if generated
+            if tts_audio_path and os.path.isfile(tts_audio_path):
+                key = await loop.run_in_executor(None, self._upload_file_sync, tts_audio_path, "stream")
+                if key:
+                    await loop.run_in_executor(
+                        None, self._send_message_sync,
+                        receive_id_type, msg.chat_id, "file", json.dumps({"file_key": key}, ensure_ascii=False),
+                    )
 
             if msg.content and msg.content.strip():
                 fmt = self._detect_msg_format(msg.content)
@@ -958,6 +974,80 @@ class FeishuChannel(BaseChannel):
 
         except Exception as e:
             logger.error("Error sending Feishu message: {}", e)
+
+    async def _synthesize_speech(self, text: str) -> str | None:
+        """Synthesize speech using DashScope TTS API."""
+        try:
+            import dashscope
+
+            api_key = self.config.asr_api_key
+            if not api_key:
+                logger.warning("[Feishu TTS] No API key configured")
+                return None
+
+            dashscope.api_key = api_key
+            voice = self.config.tts_voice or "Cherry"
+
+            # Clean text for TTS
+            clean_text = text.strip()
+            if not clean_text:
+                return None
+
+            logger.info("[Feishu TTS] Synthesizing with voice={}, text={}", voice, clean_text[:50])
+
+            response = dashscope.audio.qwen_tts.SpeechSynthesizer.call(
+                model="qwen3-tts-flash",
+                api_key=api_key,
+                text=clean_text,
+                voice=voice,
+            )
+
+            if response.status_code == 200:
+                audio_dir = get_media_dir("feishu")
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                import uuid
+                file_path = audio_dir / f"{uuid.uuid4().hex}.mp3"
+
+                audio_url = None
+                try:
+                    resp_data = response
+                    if isinstance(response, str):
+                        import json as json_mod
+                        resp_data = json_mod.loads(response)
+
+                    if isinstance(resp_data, dict):
+                        if "output" in resp_data and isinstance(resp_data["output"], dict):
+                            audio_obj = resp_data["output"].get("audio", {})
+                            if isinstance(audio_obj, dict):
+                                audio_url = audio_obj.get("url") or audio_obj.get("data")
+                except (KeyError, TypeError, AttributeError, json.JSONDecodeError):
+                    pass
+
+                if not audio_url:
+                    logger.warning("[Feishu TTS] No audio URL in response")
+                    return None
+
+                logger.info("[Feishu TTS] Downloading from: {}", audio_url[:80])
+                try:
+                    import urllib.request
+                    with urllib.request.urlopen(audio_url, timeout=30) as remote:
+                        audio_bytes = remote.read()
+                except Exception as e:
+                    logger.error("[Feishu TTS] Download failed: {}", e)
+                    return None
+
+                with open(file_path, "wb") as f:
+                    f.write(audio_bytes)
+
+                logger.info("[Feishu TTS] Saved to: {} ({} bytes)", file_path, len(audio_bytes))
+                return str(file_path)
+            else:
+                logger.warning("[Feishu TTS] Failed: {} {}", response.code, response.message)
+                return None
+
+        except Exception as e:
+            logger.error("[Feishu TTS] Error: {}", e)
+            return None
 
     def _on_message_sync(self, data: Any) -> None:
         """
