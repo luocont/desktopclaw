@@ -10,19 +10,24 @@ let feishuSSEController = null
 
 const createWindow = () => {
     if(win)return
+    const { width: screenWidth, height: screenHeight } = require('electron').screen.getPrimaryDisplay().workAreaSize
         win = new BrowserWindow({
-        width: 800,
-        height: 600,
-        autoHideMenuBar: true,
+        width: screenWidth,
+        height: screenHeight,
         x: 0,
         y: 0,
+        transparent: true,
+        frame: false,
+        alwaysOnTop: true,
+        resizable: false,
+        skipTaskbar: true,
+        autoHideMenuBar: true,
         webPreferences: {
             preload:path.resolve(__dirname,'preload.js'),
             devTools: isDev,
             contextIsolation: true,
             nodeIntegration: false
         }
-        //alwaysOnTop: true
     })
     
     // 修改 CSP 以允许加载本地媒体文件和连接后端
@@ -55,6 +60,13 @@ app.on('window-all-closed',() => {
 
 app.on('activate',()=>{
     if(BrowserWindow.getAllWindows().length === 0)createWindow()
+})
+
+// IPC handler for setting ignore mouse events (click-through)
+ipcMain.handle('set-ignore-mouse-events', (event, ignore, options) => {
+    if (win && !win.isDestroyed()) {
+        win.setIgnoreMouseEvents(ignore, options)
+    }
 })
 
 // IPC handler for sending messages to backend
