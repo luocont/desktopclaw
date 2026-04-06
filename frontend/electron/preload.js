@@ -11,5 +11,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   removeFeishuListener: () => {
     ipcRenderer.removeAllListeners('feishu-event')
   },
-  setIgnoreMouseEvents: (ignore, options) => ipcRenderer.invoke('set-ignore-mouse-events', ignore, options)
+  setIgnoreMouseEvents: (ignore, options) => ipcRenderer.invoke('set-ignore-mouse-events', ignore, options),
+  scanLive2DModels: () => ipcRenderer.invoke('scan-live2d-models')
 })
