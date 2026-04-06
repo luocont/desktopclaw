@@ -97,17 +97,53 @@
         @mousedown="startDrag"
       >
         <canvas ref="live2dCanvas" id="live2d-canvas"></canvas>
-        <div v-if="!isModelLoaded" class="live2d-loading">加载中...</div>
+        <div v-if="!isModelLoaded" class="live2d-loading">
+          {{ modelError || '加载中...' }}
+        </div>
       </div>
 
-      <button
-        class="toggle-dialog-btn"
-        @click.stop="showDialog = !showDialog"
-        :class="{ active: showDialog }"
-        title="打开对话框"
-      >
-        <span class="btn-icon">💬</span>
-      </button>
+      <div class="button-row">
+        <button
+          class="toggle-dialog-btn"
+          @click.stop="showModelPicker = false; showDialog = !showDialog"
+          :class="{ active: showDialog }"
+          title="打开对话框"
+        >
+          <span class="btn-icon">💬</span>
+        </button>
+        <button
+          class="model-switch-btn"
+          @click.stop="showDialog = false; showModelPicker = !showModelPicker"
+          :class="{ active: showModelPicker }"
+          title="更换皮肤"
+        >
+          <span class="btn-icon">👗</span>
+        </button>
+      </div>
+
+      <transition name="picker-fade">
+        <div v-if="showModelPicker" class="model-picker" @click.stop>
+          <div class="picker-header">
+            <span>选择皮肤</span>
+            <button class="picker-close" @click="showModelPicker = false">✕</button>
+          </div>
+          <div class="picker-list">
+            <div
+              v-for="m in availableModels"
+              :key="m.path"
+              :class="['picker-item', { active: currentModelUrl === m.path }]"
+              @click="switchModel(m.path)"
+            >
+              <span class="picker-item-icon">🎭</span>
+              <span class="picker-item-name">{{ m.name }}</span>
+              <span v-if="currentModelUrl === m.path" class="picker-check">✓</span>
+            </div>
+            <div v-if="availableModels.length === 0" class="picker-empty">
+              暂无可用皮肤
+            </div>
+          </div>
+        </div>
+      </transition>
     </div>
   </div>
 </template>
@@ -148,8 +184,13 @@ const petContainer = ref(null);
 
 const live2dCanvas = ref(null);
 const isModelLoaded = ref(false);
+const modelError = ref('');
 let app = null;
 let model = null;
+
+const currentModelUrl = ref('/Haru/Haru.model3.json');
+const availableModels = ref([]);
+const showModelPicker = ref(false);
 
 const isDragging = ref(false);
 const dragMoved = ref(false);
@@ -203,32 +244,37 @@ function waitForCubismCore() {
   });
 }
 
-async function initLive2D() {
+async function ensurePixiApp() {
+  if (app) return;
+
+  if (!live2dCanvas.value) {
+    throw new Error('Canvas 元素不存在');
+  }
+
+  app = new PIXI.Application({
+    view: live2dCanvas.value,
+    width: 300,
+    height: 400,
+    transparent: true,
+    backgroundColor: 0x000000,
+    backgroundAlpha: 0,
+    clearBeforeRender: true,
+    preserveDrawingBuffer: false,
+    antialias: true,
+    resolution: window.devicePixelRatio || 1,
+    autoDensity: true
+  });
+}
+
+async function loadModel() {
   try {
+    modelError.value = '';
     await waitForCubismCore();
-
-    if (!live2dCanvas.value) {
-      throw new Error('Canvas 元素不存在');
-    }
-
-    app = new PIXI.Application({
-      view: live2dCanvas.value,
-      width: 300,
-      height: 400,
-      transparent: true,
-      backgroundColor: 0x000000,
-      backgroundAlpha: 0,
-      clearBeforeRender: true,
-      preserveDrawingBuffer: false,
-      antialias: true,
-      resolution: window.devicePixelRatio || 1,
-      autoDensity: true
-    });
+    await ensurePixiApp();
 
     window.PIXI = PIXI;
 
-    const modelUrl = '/Haru/Haru.model3.json';
-    model = await Live2DModel.from(modelUrl);
+    model = await Live2DModel.from(currentModelUrl.value);
 
     updateModelScale();
     app.stage.addChild(model);
@@ -241,6 +287,8 @@ async function initLive2D() {
 
   } catch (error) {
     console.error('Live2D 初始化失败:', error);
+    modelError.value = error.message || '模型加载失败';
+    isModelLoaded.value = false;
   }
 }
 
@@ -261,27 +309,21 @@ function playStartupAnimation() {
   try {
     if (!model) return;
 
-    const expressions = ['F01', 'F02', 'F03', 'F04', 'F05', 'F06', 'F07', 'F08'];
-    const randomExpression = expressions[Math.floor(Math.random() * expressions.length)];
+    const motionGroups = model.internalModel.motionManager.motionGroups;
+    const expressionNames = model.internalModel.motionManager.expressionManager ? Object.keys(model.internalModel.motionManager.expressionManager.expressions || {}) : [];
 
-    if (model.motion) {
-      model.motion('Idle', 0, 3);
+    const firstGroup = Object.keys(motionGroups)[0];
+    if (firstGroup && model.motion) {
+      model.motion(firstGroup, 0, 3);
     }
 
-    setTimeout(() => {
-      if (model && model.expression) {
-        model.expression(randomExpression);
-      }
-    }, 500);
-
-    setTimeout(() => {
-      if (model && model.expression) {
-        model.expression('F01');
-      }
-    }, 2000);
-
+    if (expressionNames.length > 0 && model.expression) {
+      const randomExp = expressionNames[Math.floor(Math.random() * expressionNames.length)];
+      setTimeout(() => { if (model && model.expression) model.expression(randomExp); }, 500);
+      setTimeout(() => { if (model && model.expression) model.expression(expressionNames[0]); }, 2000);
+    }
   } catch (error) {
-    console.error('播放启动动画失败:', error);
+    console.warn('播放启动动画失败:', error);
   }
 }
 
@@ -290,36 +332,28 @@ function playIdleAnimation() {
   try {
     if (!model) return;
 
-    const idleActions = [
-      { motion: 'Idle', expression: 'F01' },
-      { motion: 'Idle', expression: 'F02' },
-      { motion: 'Idle', expression: 'F03' },
-      { motion: 'Idle', expression: 'F04' }
-    ];
-
-    let currentActionIndex = 0;
+    const motionGroups = model.internalModel.motionManager.motionGroups;
+    const expressionNames = model.internalModel.motionManager.expressionManager ? Object.keys(model.internalModel.motionManager.expressionManager.expressions || {}) : [];
+    const groupNames = Object.keys(motionGroups);
 
     const playCurrentIdleAction = () => {
       if (!model) return;
 
-      const currentAction = idleActions[currentActionIndex];
-
       try {
-        if (model.motion) {
-          model.motion(currentAction.motion, Math.floor(Math.random() * 2), 1);
+        if (groupNames.length > 0 && model.motion) {
+          const groupName = groupNames[Math.floor(Math.random() * groupNames.length)];
+          const group = motionGroups[groupName];
+          const index = Math.floor(Math.random() * (group?.length || 1));
+          model.motion(groupName, index, 1);
         }
 
-        setTimeout(() => {
-          if (model && model.expression) {
-            model.expression(currentAction.expression);
-          }
-        }, 500);
-
+        if (expressionNames.length > 0 && model.expression) {
+          const expName = expressionNames[Math.floor(Math.random() * expressionNames.length)];
+          setTimeout(() => { if (model && model.expression) model.expression(expName); }, 500);
+        }
       } catch (error) {
         console.warn('播放待机动作失败:', error);
       }
-
-      currentActionIndex = (currentActionIndex + 1) % idleActions.length;
     };
 
     playCurrentIdleAction();
@@ -352,47 +386,74 @@ function playRandomMotion() {
   try {
     if (!model) return;
 
-    const expressions = ['F01', 'F02', 'F03', 'F04', 'F05', 'F06', 'F07', 'F08'];
-    const randomExpression = expressions[Math.floor(Math.random() * expressions.length)];
+    const motionGroups = model.internalModel.motionManager.motionGroups;
+    const expressionNames = model.internalModel.motionManager.expressionManager ? Object.keys(model.internalModel.motionManager.expressionManager.expressions || {}) : [];
+    const groupNames = Object.keys(motionGroups);
 
-    if (model.motion) {
-      const motionIndex = Math.floor(Math.random() * 4);
-      model.motion('TapBody', motionIndex, 3);
+    if (groupNames.length > 0 && model.motion) {
+      const groupName = groupNames[Math.floor(Math.random() * groupNames.length)];
+      const group = motionGroups[groupName];
+      const index = Math.floor(Math.random() * (group?.length || 1));
+      model.motion(groupName, index, 3);
 
-      setTimeout(() => {
-        if (model && model.expression) {
-          model.expression(randomExpression);
-        }
-      }, 300);
-
-      setTimeout(() => {
-        if (model && model.expression) {
-          model.expression('F01');
-        }
-      }, 2500);
+      if (expressionNames.length > 0 && model.expression) {
+        const randomExp = expressionNames[Math.floor(Math.random() * expressionNames.length)];
+        setTimeout(() => { if (model && model.expression) model.expression(randomExp); }, 300);
+        setTimeout(() => { if (model && model.expression) model.expression(expressionNames[0]); }, 2500);
+      }
     }
   } catch (error) {
     console.warn('播放交互动画失败:', error);
   }
 }
 
-function cleanupLive2D() {
+function cleanupModel() {
   if (idleAnimationInterval) {
     clearInterval(idleAnimationInterval);
     idleAnimationInterval = null;
   }
 
   if (model) {
+    if (app && app.stage) {
+      app.stage.removeChild(model);
+    }
     model.destroy();
     model = null;
   }
 
+  isModelLoaded.value = false;
+  modelError.value = '';
+}
+
+function cleanupLive2D() {
+  cleanupModel();
+
   if (app) {
-    app.destroy(true);
+    app.destroy(true, { children: true, texture: true, baseTexture: true });
     app = null;
   }
+}
 
-  isModelLoaded.value = false;
+async function scanModels() {
+  if (window.electronAPI && window.electronAPI.scanLive2DModels) {
+    try {
+      const result = await window.electronAPI.scanLive2DModels();
+      if (result.success && result.models.length > 0) {
+        availableModels.value = result.models;
+      }
+    } catch (error) {
+      console.error('扫描模型失败:', error);
+    }
+  } else {
+    availableModels.value = [{ name: 'Haru', path: '/Haru/Haru.model3.json' }];
+  }
+}
+
+async function switchModel(modelPath) {
+  currentModelUrl.value = modelPath;
+  showModelPicker.value = false;
+  cleanupModel();
+  await loadModel();
 }
 
 const startDrag = (e) => {
@@ -684,10 +745,11 @@ const uploadAudio = async (audioBlob) => {
 
 onMounted(() => {
   connectFeishuSSE();
-  setTimeout(initLive2D, 500);
+  setTimeout(loadModel, 500);
   window.addEventListener('mousemove', onMouseMove);
   window.addEventListener('mouseup', onMouseUp);
   setClickThrough(true);
+  scanModels();
 });
 
 onUnmounted(() => {
@@ -1060,9 +1122,7 @@ onUnmounted(() => {
 }
 
 .toggle-dialog-btn {
-  position: absolute;
-  bottom: 10px;
-  right: -10px;
+  position: static;
   width: 40px;
   height: 40px;
   border-radius: 50%;
@@ -1216,5 +1276,195 @@ onUnmounted(() => {
 
 .markdown-body :deep(em) {
   font-style: italic;
+}
+
+.button-row {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.model-switch-btn {
+  position: static;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.25s ease;
+  z-index: 10;
+}
+
+.model-switch-btn:hover {
+  transform: scale(1.1);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.model-switch-btn.active {
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+}
+
+.model-switch-btn.active .btn-icon {
+  filter: brightness(10);
+}
+
+.model-picker {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-right: 20px;
+  width: 200px;
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  overflow: hidden;
+  z-index: 1001;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+.picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.picker-close {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.picker-close:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.picker-list {
+  padding: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.picker-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.picker-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.picker-list::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 2px;
+}
+
+.picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-bottom: 2px;
+}
+
+.picker-item:last-child {
+  margin-bottom: 0;
+}
+
+.picker-item:hover {
+  background: rgba(240, 147, 251, 0.1);
+}
+
+.picker-item.active {
+  background: rgba(245, 87, 108, 0.1);
+}
+
+.picker-item-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.picker-item-name {
+  flex: 1;
+  font-size: 13px;
+  color: #333;
+  font-weight: 500;
+}
+
+.picker-item.active .picker-item-name {
+  color: #f5576c;
+  font-weight: 600;
+}
+
+.picker-check {
+  color: #f5576c;
+  font-weight: bold;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.picker-empty {
+  text-align: center;
+  padding: 20px 12px;
+  color: #999;
+  font-size: 13px;
+}
+
+.picker-fade-enter-active {
+  animation: pickerIn 0.25s ease-out;
+}
+
+.picker-fade-leave-active {
+  animation: pickerOut 0.15s ease-in;
+}
+
+@keyframes pickerIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px) translateY(-50%) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) translateY(-50%) scale(1);
+  }
+}
+
+@keyframes pickerOut {
+  from {
+    opacity: 1;
+    transform: translateX(0) translateY(-50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-10px) translateY(-50%) scale(0.95);
+  }
 }
 </style>

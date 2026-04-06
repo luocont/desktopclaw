@@ -1,5 +1,6 @@
-const {app,BrowserWindow,ipcMain} = require('electron')
+const {app,BrowserWindow,ipcMain,shell} = require('electron')
 const path = require('path')
+const fs = require('fs')
 const http = require('http')
 
 // 检测是否在开发模式：检查是否有 VITE 开发服务器运行，或通过环境变量
@@ -185,4 +186,40 @@ ipcMain.handle('disconnect-feishu-sse', async (event) => {
         console.log('[Electron] Feishu SSE disconnected')
     }
     return { success: true }
+})
+
+// IPC handler for scanning available Live2D models in public directory
+ipcMain.handle('scan-live2d-models', async (event) => {
+    const publicDir = path.join(__dirname, '../public')
+    
+    try {
+        if (!fs.existsSync(publicDir)) {
+            return { success: false, error: 'public directory not found', models: [] }
+        }
+
+        const entries = fs.readdirSync(publicDir, { withFileTypes: true })
+        const models = []
+
+        for (const entry of entries) {
+            if (!entry.isDirectory()) continue
+
+            const dirPath = path.join(publicDir, entry.name)
+            const files = fs.readdirSync(dirPath)
+            const modelFile = files.find(f => f.endsWith('.model3.json'))
+
+            if (modelFile) {
+                models.push({
+                    name: entry.name,
+                    path: `/${entry.name}/${modelFile}`
+                })
+            }
+        }
+
+        console.log(`[Electron] Found ${models.length} Live2D models:`, models.map(m => m.name))
+        return { success: true, models }
+
+    } catch (error) {
+        console.error('[Electron] Failed to scan Live2D models:', error)
+        return { success: false, error: error.message, models: [] }
+    }
 })
