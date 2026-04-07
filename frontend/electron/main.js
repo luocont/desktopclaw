@@ -12,7 +12,7 @@ let feishuSSEController = null
 const createWindow = () => {
     if(win)return
     const { width: screenWidth, height: screenHeight } = require('electron').screen.getPrimaryDisplay().workAreaSize
-        win = new BrowserWindow({
+    win = new BrowserWindow({
         width: screenWidth,
         height: screenHeight,
         x: 0,
@@ -67,6 +67,13 @@ app.on('activate',()=>{
 ipcMain.handle('set-ignore-mouse-events', (event, ignore, options) => {
     if (win && !win.isDestroyed()) {
         win.setIgnoreMouseEvents(ignore, options)
+    }
+})
+
+// IPC handler for resizing and positioning the pet window
+ipcMain.handle('resize-pet-window', (event, x, y, width, height) => {
+    if (win && !win.isDestroyed()) {
+        win.setBounds({ x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) })
     }
 })
 

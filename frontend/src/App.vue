@@ -99,11 +99,21 @@
 
       <div
         class="live2d-wrapper"
+        :style="live2dWrapperStyle"
         @mousedown="startDrag"
       >
         <canvas ref="live2dCanvas" id="live2d-canvas"></canvas>
         <div v-if="!isModelLoaded" class="live2d-loading">
           {{ modelError || '加载中...' }}
+        </div>
+        <div
+          class="resize-handle"
+          @mousedown.stop="startResize"
+          title="拖动缩放"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M11 1L1 11M11 5L5 11M11 9L9 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
         </div>
       </div>
 
@@ -215,10 +225,16 @@ const isDragging = ref(false);
 const dragMoved = ref(false);
 const startX = ref(0);
 const startY = ref(0);
-const petX = ref(window.innerWidth - 320);
-const petY = ref(window.innerHeight - 450);
+const petX = ref(window.innerWidth - 380);
+const petY = ref(window.innerHeight - 500);
 
 const isHoveringPet = ref(false);
+
+const petScale = ref(1);
+const isResizing = ref(false);
+const resizeStartX = ref(0);
+const resizeStartY = ref(0);
+const resizeStartScale = ref(1);
 
 const API_URL = "http://127.0.0.1:3000";
 
@@ -226,6 +242,51 @@ const petContainerStyle = computed(() => ({
   left: petX.value + 'px',
   top: petY.value + 'px',
 }));
+
+const BASE_WIDTH = 300;
+const BASE_HEIGHT = 400;
+const MIN_SCALE = 0.5;
+const MAX_SCALE = 2.0;
+
+const currentPetWidth = computed(() => Math.round(BASE_WIDTH * petScale.value));
+const currentPetHeight = computed(() => Math.round(BASE_HEIGHT * petScale.value));
+
+const live2dWrapperStyle = computed(() => ({
+  width: currentPetWidth.value + 'px',
+  height: currentPetHeight.value + 'px',
+}));
+
+function startResize(e) {
+  isResizing.value = true;
+  resizeStartX.value = e.clientX;
+  resizeStartY.value = e.clientY;
+  resizeStartScale.value = petScale.value;
+  e.preventDefault();
+}
+
+function onResizeMove(e) {
+  if (!isResizing.value) return;
+  const dx = e.clientX - resizeStartX.value;
+  const dy = e.clientY - resizeStartY.value;
+  const delta = (dx + dy) / 2;
+  const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, resizeStartScale.value + delta / 200));
+  petScale.value = newScale;
+  applyPixiResize();
+}
+
+function onResizeUp() {
+  if (isResizing.value) {
+    isResizing.value = false;
+  }
+}
+
+function applyPixiResize() {
+  if (!app) return;
+  const w = currentPetWidth.value;
+  const h = currentPetHeight.value;
+  app.renderer.resize(w, h);
+  updateModelScale();
+}
 
 function onPetAreaEnter() {
   isHoveringPet.value = true;
@@ -272,8 +333,8 @@ async function ensurePixiApp() {
 
   app = new PIXI.Application({
     view: live2dCanvas.value,
-    width: 300,
-    height: 400,
+    width: Math.round(BASE_WIDTH * petScale.value),
+    height: Math.round(BASE_HEIGHT * petScale.value),
     transparent: true,
     backgroundColor: 0x000000,
     backgroundAlpha: 0,
@@ -314,13 +375,14 @@ async function loadModel() {
 function updateModelScale() {
   if (!model) return;
 
-  const containerHeight = 400;
+  const containerWidth = Math.round(BASE_WIDTH * petScale.value);
+  const containerHeight = Math.round(BASE_HEIGHT * petScale.value);
   const targetHeight = containerHeight * 0.9;
   const modelOriginalHeight = model.height / model.scale.y;
   const scale = targetHeight / modelOriginalHeight;
 
   model.scale.set(scale);
-  model.x = (300 - model.width) / 2;
+  model.x = (containerWidth - model.width) / 2;
   model.y = (containerHeight - model.height) / 2;
 }
 
@@ -484,14 +546,18 @@ const startDrag = (e) => {
 };
 
 const onMouseMove = (e) => {
+  if (isResizing.value) {
+    onResizeMove(e);
+    return;
+  }
   if (!isDragging.value) return;
   dragMoved.value = true;
 
   let newX = e.clientX - startX.value;
   let newY = e.clientY - startY.value;
 
-  newX = Math.max(0, Math.min(newX, window.innerWidth - 340));
-  newY = Math.max(0, Math.min(newY, window.innerHeight - 440));
+  newX = Math.max(0, Math.min(newX, window.innerWidth - 100));
+  newY = Math.max(0, Math.min(newY, window.innerHeight - 100));
 
   petX.value = newX;
   petY.value = newY;
@@ -499,6 +565,7 @@ const onMouseMove = (e) => {
 
 const onMouseUp = () => {
   isDragging.value = false;
+  onResizeUp();
 };
 
 const connectFeishuSSE = async () => {
@@ -1130,6 +1197,27 @@ onUnmounted(() => {
 
 .live2d-wrapper:active {
   cursor: grabbing;
+}
+
+.resize-handle {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: nwse-resize;
+  opacity: 0.4;
+  transition: opacity 0.2s ease;
+  color: #666;
+  z-index: 10;
+}
+
+.resize-handle:hover {
+  opacity: 1;
+  color: #333;
 }
 
 #live2d-canvas {
