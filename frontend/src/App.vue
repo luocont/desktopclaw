@@ -10,12 +10,14 @@
       <transition name="bubble-fade">
         <div
           v-show="showDialog"
-          class="dialog-bubble"
+          class="dialog-bubble glass-card"
           ref="dialogBubble"
         >
           <div class="bubble-header">
             <span class="bubble-title">DesktopClaw</span>
-            <button class="bubble-close" @click="showDialog = false">✕</button>
+            <button class="bubble-close" @click="showDialog = false" aria-label="关闭对话框">
+              <X :size="14" />
+            </button>
           </div>
           <div class="bubble-messages" ref="messagesRef">
             <div
@@ -29,7 +31,7 @@
               <div class="bubble-message-content">
                 <template v-if="msg.isToolCall">
                   <div class="tool-call-indicator">
-                    <span class="tool-icon">🔧</span>
+                    <Wrench :size="14" class="tool-icon" />
                     <span class="tool-text">{{ msg.content }}</span>
                   </div>
                 </template>
@@ -40,7 +42,7 @@
                 </template>
                 <template v-else-if="msg.audioPath">
                   <div class="audio-message">
-                    <span class="audio-icon">🎤</span>
+                    <Mic :size="16" class="audio-icon" />
                     <audio controls class="audio-player">
                       <source :src="msg.audioPath" type="audio/ogg; codecs=opus">
                     </audio>
@@ -48,7 +50,7 @@
                 </template>
                 <template v-else-if="msg.ttsAudioPath">
                   <div class="tts-message">
-                    <span class="tts-icon">🔊</span>
+                    <Volume2 :size="16" class="tts-icon" />
                     <audio controls class="audio-player">
                       <source :src="msg.ttsAudioPath" type="audio/mpeg">
                     </audio>
@@ -73,8 +75,10 @@
               @click="sendMessage"
               :disabled="loading || !inputValue.trim() || isRecording"
               class="bubble-send-btn"
+              aria-label="发送消息"
             >
-              {{ loading ? "..." : "➤" }}
+              <Send :size="16" v-if="!loading" />
+              <span v-else class="loading-dots">...</span>
             </button>
             <button
               @mousedown="startRecording"
@@ -84,8 +88,9 @@
               @touchend.prevent="stopRecording"
               :disabled="loading"
               :class="['bubble-record-btn', { recording: isRecording }]"
+              :aria-label="isRecording ? '停止录音' : '开始录音'"
             >
-              🎤
+              <Mic :size="16" />
             </button>
           </div>
           <div class="bubble-arrow"></div>
@@ -108,24 +113,28 @@
           @click.stop="showModelPicker = false; showDialog = !showDialog"
           :class="{ active: showDialog }"
           title="打开对话框"
+          :aria-label="showDialog ? '关闭对话框' : '打开对话框'"
         >
-          <span class="btn-icon">💬</span>
+          <MessageCircle :size="20" />
         </button>
         <button
           class="model-switch-btn"
           @click.stop="showDialog = false; showModelPicker = !showModelPicker"
           :class="{ active: showModelPicker }"
           title="更换皮肤"
+          :aria-label="showModelPicker ? '关闭皮肤选择' : '打开皮肤选择'"
         >
-          <span class="btn-icon">👗</span>
+          <Palette :size="20" />
         </button>
       </div>
 
       <transition name="picker-fade">
-        <div v-if="showModelPicker" class="model-picker" @click.stop>
+        <div v-if="showModelPicker" class="model-picker glass-card" @click.stop>
           <div class="picker-header">
             <span>选择皮肤</span>
-            <button class="picker-close" @click="showModelPicker = false">✕</button>
+            <button class="picker-close" @click="showModelPicker = false" aria-label="关闭皮肤选择">
+              <X :size="14" />
+            </button>
           </div>
           <div class="picker-list">
             <div
@@ -134,9 +143,9 @@
               :class="['picker-item', { active: currentModelUrl === m.path }]"
               @click="switchModel(m.path)"
             >
-              <span class="picker-item-icon">🎭</span>
+              <Palette :size="16" class="picker-item-icon" />
               <span class="picker-item-name">{{ m.name }}</span>
-              <span v-if="currentModelUrl === m.path" class="picker-check">✓</span>
+              <Check v-if="currentModelUrl === m.path" :size="16" class="picker-check" />
             </div>
             <div v-if="availableModels.length === 0" class="picker-empty">
               暂无可用皮肤
@@ -155,6 +164,16 @@ import { Live2DModel } from 'pixi-live2d-display/cubism4';
 import axios from 'axios';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import {
+  MessageCircle,
+  X,
+  Mic,
+  Send,
+  Palette,
+  Check,
+  Wrench,
+  Volume2
+} from 'lucide-vue-next';
 
 marked.setOptions({
   breaks: true,
@@ -780,12 +799,13 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 8px;
-  z-index: 1000;
+  gap: var(--space-sm);
+  z-index: var(--z-modal);
   user-select: none;
   -webkit-user-select: none;
 }
 
+/* ===== 对话框气泡 - Glassmorphism + Indigo ===== */
 .dialog-bubble {
   position: absolute;
   right: 100%;
@@ -794,58 +814,54 @@ onUnmounted(() => {
   margin-right: 20px;
   width: 340px;
   max-height: 420px;
-  background: rgba(255, 255, 255, 0.95);
-  border-radius: 16px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15), 0 2px 8px rgba(0, 0, 0, 0.08);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.6);
 }
 
 .bubble-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 14px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--accent-indigo);
+  border-bottom: 1px solid var(--glass-border);
 }
 
 .bubble-title {
-  font-size: 13px;
+  font-size: var(--font-size-base);
   font-weight: 600;
+  color: var(--text-primary);
   letter-spacing: 0.5px;
 }
 
 .bubble-close {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.15);
   border: none;
-  color: white;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
+  color: var(--text-primary);
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
   cursor: pointer;
-  font-size: 11px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s;
+  transition: background var(--transition-fast);
 }
 
 .bubble-close:hover {
-  background: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.25);
 }
 
 .bubble-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 10px 12px;
+  padding: var(--space-md);
   max-height: 280px;
   min-height: 60px;
   scroll-behavior: smooth;
+  background: var(--bg-secondary);
 }
 
 .bubble-messages::-webkit-scrollbar {
@@ -857,12 +873,12 @@ onUnmounted(() => {
 }
 
 .bubble-messages::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 2px;
+  background: var(--glass-border);
+  border-radius: var(--radius-sm);
 }
 
 .bubble-message {
-  margin-bottom: 8px;
+  margin-bottom: var(--space-sm);
   max-width: 88%;
   animation: msgSlideIn 0.25s ease-out;
 }
@@ -888,44 +904,45 @@ onUnmounted(() => {
 
 .bubble-message-content {
   display: inline-block;
-  padding: 8px 12px;
-  border-radius: 12px;
-  font-size: 13px;
+  padding: 10px var(--space-md);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-base);
   line-height: 1.5;
   word-wrap: break-word;
   text-align: left;
 }
 
 .bubble-user .bubble-message-content {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  border-bottom-right-radius: 4px;
+  background: var(--accent-indigo);
+  color: var(--text-primary);
+  border-bottom-right-radius: var(--radius-sm);
 }
 
 .bubble-ai .bubble-message-content {
-  background: #f0f2f5;
-  color: #333;
-  border-bottom-left-radius: 4px;
+  background: var(--glass-bg-strong);
+  color: var(--text-secondary);
+  border: 1px solid var(--glass-border);
+  border-bottom-left-radius: var(--radius-sm);
 }
 
 .tool-call-indicator {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
-  color: #666;
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
 }
 
 .tool-icon {
-  font-size: 13px;
+  color: var(--text-muted);
 }
 
 .tool-text {
   font-family: monospace;
-  background: #f5f5f5;
+  background: var(--glass-bg-strong);
   padding: 2px 6px;
-  border-radius: 3px;
-  font-size: 11px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
 }
 
 .thinking-indicator {
@@ -936,20 +953,20 @@ onUnmounted(() => {
 
 .thinking-dots {
   font-style: italic;
-  color: #999;
-  font-size: 12px;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
 }
 
 .audio-message,
 .tts-message {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-sm);
 }
 
 .audio-icon,
 .tts-icon {
-  font-size: 14px;
+  color: var(--text-muted);
 }
 
 .audio-player {
@@ -959,54 +976,60 @@ onUnmounted(() => {
 
 .bubble-input {
   display: flex;
-  gap: 6px;
-  padding: 10px 12px;
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-  background: rgba(255, 255, 255, 0.5);
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border-top: 1px solid var(--glass-border);
+  background: var(--glass-bg);
 }
 
 .bubble-input-field {
   flex: 1;
-  padding: 8px 12px;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  border-radius: 20px;
-  font-size: 13px;
+  padding: 8px var(--space-md);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-base);
   outline: none;
-  background: white;
-  transition: border-color 0.2s;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  transition: border-color var(--transition-fast);
+}
+
+.bubble-input-field::placeholder {
+  color: var(--text-subtle);
 }
 
 .bubble-input-field:focus {
-  border-color: #667eea;
+  border-color: var(--accent-indigo-light);
 }
 
 .bubble-input-field:disabled {
-  background: #f5f5f5;
+  background: var(--bg-secondary);
   cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .bubble-send-btn {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
   border: none;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  font-size: 15px;
+  background: var(--accent-indigo);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: opacity 0.2s, transform 0.1s;
+  transition: all var(--transition-fast);
   flex-shrink: 0;
+  color: var(--text-primary);
 }
 
 .bubble-send-btn:hover:not(:disabled) {
-  opacity: 0.85;
+  background: var(--accent-indigo-light);
+  transform: scale(1.05);
 }
 
 .bubble-send-btn:active:not(:disabled) {
-  transform: scale(0.92);
+  transform: scale(0.95);
 }
 
 .bubble-send-btn:disabled {
@@ -1014,23 +1037,29 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 
+.loading-dots {
+  color: var(--text-primary);
+  font-size: var(--font-size-base);
+}
+
 .bubble-record-btn {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
   border: none;
-  background: #f0f2f5;
+  background: var(--glass-bg-strong);
   cursor: pointer;
-  font-size: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s;
+  transition: background var(--transition-fast);
   flex-shrink: 0;
+  color: var(--text-secondary);
+  border: 1px solid var(--glass-border);
 }
 
 .bubble-record-btn:hover:not(:disabled) {
-  background: #e4e6eb;
+  background: var(--glass-bg);
 }
 
 .bubble-record-btn:disabled {
@@ -1039,13 +1068,14 @@ onUnmounted(() => {
 }
 
 .bubble-record-btn.recording {
-  background: #ff4757;
+  background: var(--error);
+  color: var(--text-primary);
   animation: pulse 1s infinite;
 }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
+  50% { opacity: 0.7; }
 }
 
 .bubble-arrow {
@@ -1057,8 +1087,7 @@ onUnmounted(() => {
   height: 0;
   border-top: 8px solid transparent;
   border-bottom: 8px solid transparent;
-  border-left: 8px solid rgba(255, 255, 255, 0.95);
-  border-right: none;
+  border-left: 8px solid var(--glass-bg);
 }
 
 .bubble-fade-enter-active {
@@ -1091,6 +1120,7 @@ onUnmounted(() => {
   }
 }
 
+/* ===== Live2D ===== */
 .live2d-wrapper {
   width: 300px;
   height: 400px;
@@ -1113,57 +1143,70 @@ onUnmounted(() => {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  color: #999;
-  font-size: 13px;
-  background: rgba(255, 255, 255, 0.85);
-  padding: 8px 16px;
-  border-radius: 20px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  color: var(--text-secondary);
+  font-size: var(--font-size-base);
+  background: var(--glass-bg-strong);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--glass-border);
 }
 
-.toggle-dialog-btn {
-  position: static;
+/* ===== 按钮行 ===== */
+.button-row {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.toggle-dialog-btn,
+.model-switch-btn {
   width: 40px;
   height: 40px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   border: none;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15);
+  background: var(--glass-bg-strong);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.25s ease;
-  z-index: 10;
+  transition: all var(--transition-normal);
+  z-index: var(--z-base);
+  color: var(--text-secondary);
+  border: 1px solid var(--glass-border);
 }
 
-.toggle-dialog-btn:hover {
+.toggle-dialog-btn:hover,
+.model-switch-btn:hover {
   transform: scale(1.1);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  background: var(--glass-bg);
 }
 
 .toggle-dialog-btn.active {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--accent-indigo);
+  color: var(--text-primary);
 }
 
-.toggle-dialog-btn.active .btn-icon {
-  filter: brightness(10);
+.model-switch-btn.active {
+  background: var(--accent-amber);
+  color: var(--text-primary);
 }
 
-.btn-icon {
-  font-size: 18px;
-  line-height: 1;
-}
-
+/* ===== Markdown 样式 ===== */
 .markdown-body {
-  font-size: 13px;
+  font-size: var(--font-size-base);
   line-height: 1.6;
   word-wrap: break-word;
   overflow-wrap: break-word;
+  color: var(--text-secondary);
 }
 
 .markdown-body :deep(p) {
-  margin: 0 0 8px 0;
+  margin: 0 0 var(--space-sm) 0;
 }
 
 .markdown-body :deep(p:last-child) {
@@ -1174,19 +1217,20 @@ onUnmounted(() => {
 .markdown-body :deep(h2),
 .markdown-body :deep(h3),
 .markdown-body :deep(h4) {
-  margin: 12px 0 6px 0;
+  margin: var(--space-md) 0 var(--space-sm) 0;
   font-weight: 600;
   line-height: 1.3;
+  color: var(--text-primary);
 }
 
-.markdown-body :deep(h1) { font-size: 16px; }
-.markdown-body :deep(h2) { font-size: 15px; }
-.markdown-body :deep(h3) { font-size: 14px; }
+.markdown-body :deep(h1) { font-size: var(--font-size-lg); }
+.markdown-body :deep(h2) { font-size: var(--font-size-md); }
+.markdown-body :deep(h3) { font-size: var(--font-size-base); }
 
 .markdown-body :deep(ul),
 .markdown-body :deep(ol) {
-  margin: 4px 0;
-  padding-left: 18px;
+  margin: var(--space-sm) 0;
+  padding-left: 20px;
 }
 
 .markdown-body :deep(li) {
@@ -1194,23 +1238,24 @@ onUnmounted(() => {
 }
 
 .markdown-body :deep(code) {
-  background: #f0f2f5;
-  padding: 1px 5px;
-  border-radius: 4px;
+  background: var(--glass-bg-strong);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
   font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 12px;
-  color: #e83e8c;
+  font-size: var(--font-size-sm);
+  color: var(--accent-indigo-light);
 }
 
 .markdown-body :deep(pre) {
-  background: #282c34;
-  color: #abb2bf;
-  padding: 10px 12px;
-  border-radius: 8px;
-  margin: 8px 0;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  padding: var(--space-md);
+  border-radius: var(--radius-md);
+  margin: var(--space-sm) 0;
   overflow-x: auto;
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  border: 1px solid var(--glass-border);
 }
 
 .markdown-body :deep(pre code) {
@@ -1221,35 +1266,36 @@ onUnmounted(() => {
 }
 
 .markdown-body :deep(blockquote) {
-  border-left: 3px solid #667eea;
-  padding: 4px 10px;
-  margin: 6px 0;
-  color: #666;
-  background: rgba(102, 126, 234, 0.05);
-  border-radius: 0 6px 6px 0;
+  border-left: 3px solid var(--accent-indigo);
+  padding: var(--space-sm) var(--space-md);
+  margin: var(--space-sm) 0;
+  color: var(--text-muted);
+  background: var(--glass-bg);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
 .markdown-body :deep(table) {
   width: 100%;
   border-collapse: collapse;
-  margin: 8px 0;
-  font-size: 12px;
+  margin: var(--space-sm) 0;
+  font-size: var(--font-size-sm);
 }
 
 .markdown-body :deep(th),
 .markdown-body :deep(td) {
-  border: 1px solid #e0e0e0;
-  padding: 5px 8px;
+  border: 1px solid var(--glass-border);
+  padding: var(--space-sm);
   text-align: left;
 }
 
 .markdown-body :deep(th) {
-  background: #f5f5f5;
+  background: var(--glass-bg-strong);
   font-weight: 600;
+  color: var(--text-primary);
 }
 
 .markdown-body :deep(a) {
-  color: #667eea;
+  color: var(--accent-indigo-light);
   text-decoration: none;
 }
 
@@ -1259,116 +1305,72 @@ onUnmounted(() => {
 
 .markdown-body :deep(hr) {
   border: none;
-  border-top: 1px solid #e0e0e0;
-  margin: 10px 0;
+  border-top: 1px solid var(--glass-border);
+  margin: var(--space-md) 0;
 }
 
 .markdown-body :deep(img) {
   max-width: 100%;
-  border-radius: 6px;
-  margin: 4px 0;
+  border-radius: var(--radius-sm);
+  margin: var(--space-sm) 0;
 }
 
 .markdown-body :deep(strong) {
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
 }
 
-.markdown-body :deep(em) {
-  font-style: italic;
-}
-
-.button-row {
-  position: absolute;
-  left: 100%;
-  top: 50%;
-  transform: translateY(-50%);
-  margin-left: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.model-switch-btn {
-  position: static;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.25s ease;
-  z-index: 10;
-}
-
-.model-switch-btn:hover {
-  transform: scale(1.1);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-}
-
-.model-switch-btn.active {
-  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-}
-
-.model-switch-btn.active .btn-icon {
-  filter: brightness(10);
-}
-
+/* ===== 皮肤选择器 - Glassmorphism + Amber ===== */
 .model-picker {
   position: absolute;
   right: 100%;
   top: 50%;
   transform: translateY(-50%);
   margin-right: 20px;
-  width: 200px;
-  background: rgba(255, 255, 255, 0.96);
-  border-radius: 14px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.08);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  width: 220px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
-  z-index: 1001;
-  border: 1px solid rgba(255, 255, 255, 0.6);
+  z-index: calc(var(--z-modal) + 1);
 }
 
 .picker-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 14px;
-  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-  color: white;
-  font-size: 13px;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--accent-amber);
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.picker-header span {
+  font-size: var(--font-size-base);
   font-weight: 600;
+  color: var(--text-primary);
 }
 
 .picker-close {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.15);
   border: none;
-  color: white;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
+  color: var(--text-primary);
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
   cursor: pointer;
-  font-size: 11px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s;
+  transition: background var(--transition-fast);
 }
 
 .picker-close:hover {
-  background: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.25);
 }
 
 .picker-list {
-  padding: 6px;
-  max-height: 220px;
+  padding: var(--space-sm);
+  max-height: 240px;
   overflow-y: auto;
+  background: var(--bg-secondary);
 }
 
 .picker-list::-webkit-scrollbar {
@@ -1380,18 +1382,18 @@ onUnmounted(() => {
 }
 
 .picker-list::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 2px;
+  background: var(--glass-border);
+  border-radius: var(--radius-sm);
 }
 
 .picker-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 9px 12px;
-  border-radius: 8px;
+  gap: var(--space-sm);
+  padding: 10px var(--space-md);
+  border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all var(--transition-fast);
   margin-bottom: 2px;
 }
 
@@ -1400,42 +1402,45 @@ onUnmounted(() => {
 }
 
 .picker-item:hover {
-  background: rgba(240, 147, 251, 0.1);
+  background: var(--glass-bg-strong);
 }
 
 .picker-item.active {
-  background: rgba(245, 87, 108, 0.1);
+  background: rgba(217, 119, 6, 0.15);
+  border: 1px solid rgba(217, 119, 6, 0.3);
 }
 
 .picker-item-icon {
-  font-size: 16px;
   flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.picker-item.active .picker-item-icon {
+  color: var(--accent-amber);
 }
 
 .picker-item-name {
   flex: 1;
-  font-size: 13px;
-  color: #333;
+  font-size: var(--font-size-base);
+  color: var(--text-secondary);
   font-weight: 500;
 }
 
 .picker-item.active .picker-item-name {
-  color: #f5576c;
+  color: var(--accent-amber);
   font-weight: 600;
 }
 
 .picker-check {
-  color: #f5576c;
-  font-weight: bold;
-  font-size: 14px;
+  color: var(--accent-amber);
   flex-shrink: 0;
 }
 
 .picker-empty {
   text-align: center;
-  padding: 20px 12px;
-  color: #999;
-  font-size: 13px;
+  padding: var(--space-xl) var(--space-md);
+  color: var(--text-muted);
+  font-size: var(--font-size-base);
 }
 
 .picker-fade-enter-active {
