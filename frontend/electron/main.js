@@ -78,22 +78,29 @@ ipcMain.handle('resize-pet-window', (event, x, y, width, height) => {
 })
 
 // IPC handler for sending messages to backend
-ipcMain.handle('send-message', async (event, message, channel = 'feishu') => {
+ipcMain.handle('send-message', async (event, message, options = {}) => {
     return new Promise((resolve, reject) => {
-        const data = JSON.stringify({ message, channel });
+        const body = { message, ...options };
+        const data = JSON.stringify(body);
 
-        const options = {
+        const headers = {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(data)
+        };
+
+        if (options.apiKey) {
+            headers['Authorization'] = `Bearer ${options.apiKey}`;
+        }
+
+        const reqOptions = {
             hostname: '127.0.0.1',
             port: 3000,
             path: '/chat',
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(data)
-            }
+            headers
         };
 
-        const req = http.request(options, (res) => {
+        const req = http.request(reqOptions, (res) => {
             let responseData = '';
 
             res.on('data', (chunk) => {

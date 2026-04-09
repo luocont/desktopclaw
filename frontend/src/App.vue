@@ -120,7 +120,7 @@
       <div class="button-row">
         <button
           class="toggle-dialog-btn"
-          @click.stop="showModelPicker = false; showDialog = !showDialog"
+          @click.stop="showModelPicker = false; showSettings = false; showDialog = !showDialog"
           :class="{ active: showDialog }"
           title="打开对话框"
           :aria-label="showDialog ? '关闭对话框' : '打开对话框'"
@@ -129,14 +129,66 @@
         </button>
         <button
           class="model-switch-btn"
-          @click.stop="showDialog = false; showModelPicker = !showModelPicker"
+          @click.stop="showDialog = false; showSettings = false; showModelPicker = !showModelPicker"
           :class="{ active: showModelPicker }"
           title="更换皮肤"
           :aria-label="showModelPicker ? '关闭皮肤选择' : '打开皮肤选择'"
         >
           <Palette :size="20" />
         </button>
+        <button
+          class="settings-btn"
+          @click.stop="showDialog = false; showModelPicker = false; showSettings = !showSettings"
+          :class="{ active: showSettings }"
+          title="设置"
+          :aria-label="showSettings ? '关闭设置' : '打开设置'"
+        >
+          <Settings :size="20" />
+        </button>
       </div>
+
+      <transition name="picker-fade">
+        <div v-if="showSettings" class="settings-panel glass-card" @click.stop>
+          <div class="picker-header">
+            <span>设置</span>
+            <button class="picker-close" @click="showSettings = false" aria-label="关闭设置">
+              <X :size="14" />
+            </button>
+          </div>
+          <div class="settings-form">
+            <div class="settings-field">
+              <label class="settings-label">Base URL</label>
+              <input
+                v-model="baseUrl"
+                type="text"
+                class="settings-input"
+                placeholder="http://127.0.0.1:3000"
+              />
+            </div>
+            <div class="settings-field">
+              <label class="settings-label">API Key</label>
+              <input
+                v-model="apiKey"
+                type="password"
+                class="settings-input"
+                placeholder="sk-..."
+              />
+            </div>
+            <div class="settings-field">
+              <label class="settings-label">模型 ID</label>
+              <input
+                v-model="modelId"
+                type="text"
+                class="settings-input"
+                placeholder="gpt-4o-mini"
+              />
+            </div>
+            <button class="settings-save-btn" @click="saveSettings">
+              保存设置
+            </button>
+          </div>
+        </div>
+      </transition>
 
       <transition name="picker-fade">
         <div v-if="showModelPicker" class="model-picker glass-card" @click.stop>
@@ -182,7 +234,8 @@ import {
   Palette,
   Check,
   Wrench,
-  Volume2
+  Volume2,
+  Settings
 } from 'lucide-vue-next';
 
 marked.setOptions({
@@ -220,6 +273,7 @@ let model = null;
 const currentModelUrl = ref('/Haru/Haru.model3.json');
 const availableModels = ref([]);
 const showModelPicker = ref(false);
+const showSettings = ref(false);
 
 const isDragging = ref(false);
 const dragMoved = ref(false);
@@ -236,11 +290,19 @@ const resizeStartX = ref(0);
 const resizeStartY = ref(0);
 const resizeStartScale = ref(1);
 
-const API_URL = "http://127.0.0.1:3000";
+const DEFAULT_API_URL = "http://127.0.0.1:3000";
+const storedBaseUrl = localStorage.getItem('pet_base_url') || DEFAULT_API_URL;
+const storedApiKey = localStorage.getItem('pet_api_key') || '';
+const storedModelId = localStorage.getItem('pet_model_id') || '';
+const baseUrl = ref(storedBaseUrl);
+const apiKey = ref(storedApiKey);
+const modelId = ref(storedModelId);
 
 const petContainerStyle = computed(() => ({
   left: petX.value + 'px',
   top: petY.value + 'px',
+  width: currentPetWidth.value + 'px',
+  height: currentPetHeight.value + 'px',
 }));
 
 const BASE_WIDTH = 300;
@@ -250,6 +312,8 @@ const MAX_SCALE = 2.0;
 
 const currentPetWidth = computed(() => Math.round(BASE_WIDTH * petScale.value));
 const currentPetHeight = computed(() => Math.round(BASE_HEIGHT * petScale.value));
+
+const petScalerStyle = computed(() => ({}));
 
 const live2dWrapperStyle = computed(() => ({
   width: currentPetWidth.value + 'px',
@@ -375,8 +439,8 @@ async function loadModel() {
 function updateModelScale() {
   if (!model) return;
 
-  const containerWidth = Math.round(BASE_WIDTH * petScale.value);
-  const containerHeight = Math.round(BASE_HEIGHT * petScale.value);
+  const containerWidth = currentPetWidth.value;
+  const containerHeight = currentPetHeight.value;
   const targetHeight = containerHeight * 0.9;
   const modelOriginalHeight = model.height / model.scale.y;
   const scale = targetHeight / modelOriginalHeight;
@@ -530,6 +594,13 @@ async function scanModels() {
   }
 }
 
+function saveSettings() {
+  localStorage.setItem('pet_base_url', baseUrl.value);
+  localStorage.setItem('pet_api_key', apiKey.value);
+  localStorage.setItem('pet_model_id', modelId.value);
+  showSettings.value = false;
+}
+
 async function switchModel(modelPath) {
   currentModelUrl.value = modelPath;
   showModelPicker.value = false;
@@ -593,7 +664,7 @@ const connectFeishuSSE = async () => {
     return;
   }
 
-  const es = new EventSource(`${API_URL}/feishu/events`);
+  const es = new EventSource(`${baseUrl.value}/feishu/events`);
   eventSource.value = es;
   feishuConnected.value = true;
 
@@ -684,24 +755,35 @@ const sendToAI = async (message) => {
   scrollToBottom();
 
   try {
-    const response = await fetch(`${API_URL}/chat`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ message }),
-    });
+    console.log('[DesktopPet] 发送消息到后端:', message);
+
+    let data;
+    if (window.electronAPI && window.electronAPI.sendMessage) {
+      const sendOptions = {};
+      if (modelId.value) sendOptions.modelId = modelId.value;
+      if (apiKey.value) sendOptions.apiKey = apiKey.value;
+      data = await window.electronAPI.sendMessage(message, sendOptions);
+    } else {
+      const headers = { "Content-Type": "application/json" };
+      if (apiKey.value) {
+        headers["Authorization"] = `Bearer ${apiKey.value}`;
+      }
+      const requestBody = { message, modelId: modelId.value || undefined };
+      const response = await fetch(`${baseUrl.value}/chat`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBody),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      data = await response.json();
+    }
 
     const thinkingIndex = messages.value.findIndex((m) => m.isThinking);
     if (thinkingIndex !== -1) {
       messages.value.splice(thinkingIndex, 1);
     }
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const data = await response.json();
 
     if (data.success) {
       messages.value.push({
@@ -722,9 +804,10 @@ const sendToAI = async (message) => {
       messages.value.splice(thinkingIndex, 1);
     }
 
+    const errorMsg = error.message || error.toString();
     messages.value.push({
       role: "ai",
-      content: "抱歉，连接服务器失败，请检查网络或稍后重试。",
+      content: "连接失败: " + errorMsg,
     });
   } finally {
     loading.value = false;
@@ -1529,6 +1612,92 @@ onUnmounted(() => {
   padding: var(--space-xl) var(--space-md);
   color: var(--text-muted);
   font-size: var(--font-size-base);
+}
+
+.settings-panel {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-right: 20px;
+  width: 280px;
+  z-index: 1001;
+}
+
+.settings-form {
+  padding: var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.settings-input {
+  padding: 8px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.settings-input:focus {
+  border-color: var(--accent-amber);
+}
+
+.settings-save-btn {
+  padding: 8px 16px;
+  background: var(--accent-amber);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.settings-save-btn:hover {
+  opacity: 0.85;
+}
+
+.settings-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #555;
+  transition: all 0.2s ease;
+}
+
+.settings-btn:hover {
+  background: rgba(255, 255, 255, 1);
+  color: #333;
+}
+
+.settings-btn.active {
+  background: var(--accent-amber);
+  color: white;
 }
 
 .picker-fade-enter-active {
