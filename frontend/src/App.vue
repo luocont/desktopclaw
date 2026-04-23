@@ -117,7 +117,7 @@
         </div>
       </div>
 
-      <div class="button-row">
+      <div class="button-row" :style="{ transform: `translateY(-50%) scale(${petScale})`, transformOrigin: 'left center' }">
         <button
           class="toggle-dialog-btn"
           @click.stop="showModelPicker = false; showSettings = false; showDialog = !showDialog"
@@ -125,7 +125,7 @@
           title="打开对话框"
           :aria-label="showDialog ? '关闭对话框' : '打开对话框'"
         >
-          <MessageCircle :size="20" />
+          <MessageCircle :size="Math.round(20 * petScale)" />
         </button>
         <button
           class="model-switch-btn"
@@ -134,7 +134,7 @@
           title="更换皮肤"
           :aria-label="showModelPicker ? '关闭皮肤选择' : '打开皮肤选择'"
         >
-          <Palette :size="20" />
+          <Palette :size="Math.round(20 * petScale)" />
         </button>
         <button
           class="settings-btn"
@@ -143,7 +143,7 @@
           title="设置"
           :aria-label="showSettings ? '关闭设置' : '打开设置'"
         >
-          <Settings :size="20" />
+          <Settings :size="Math.round(20 * petScale)" />
         </button>
       </div>
 
@@ -425,6 +425,8 @@ async function loadModel() {
 
     isModelLoaded.value = true;
 
+    setupWatermarkRemoval();
+
     playStartupAnimation();
     playIdleAnimation();
     setupModelInteraction();
@@ -448,6 +450,20 @@ function updateModelScale() {
   model.scale.set(scale);
   model.x = (containerWidth - model.width) / 2;
   model.y = (containerHeight - model.height) / 2;
+}
+
+// 关闭林翩翩模型的水印
+function setupWatermarkRemoval() {
+  if (!model || !currentModelUrl.value.includes('林翩翩')) return;
+  
+  // 尝试播放"水印"表情来隐藏水印（现在水印.exp3.json 中 Param56 = 0）
+  try {
+    if (model.expression) {
+      model.expression('水印');
+    }
+  } catch (e) {
+    console.warn('播放水印表情失败:', e);
+  }
 }
 
 function playStartupAnimation() {
@@ -590,7 +606,14 @@ async function scanModels() {
       console.error('扫描模型失败:', error);
     }
   } else {
-    availableModels.value = [{ name: 'Haru', path: '/Haru/Haru.model3.json' }];
+    // 手动配置可用的模型列表
+    availableModels.value = [
+      { name: 'Haru', path: '/Haru/Haru.model3.json' },
+      { name: 'Mahiro', path: '/Mahiro_GG/Mahiro_V1.model3.json' },
+      { name: 'UG', path: '/UG/ugofficial.model3.json' },
+      { name: '弈', path: '/弈/13.model3.json' },
+      { name: '林翩翩', path: '/林翩翩/林翩翩.model3.json' }
+    ];
   }
 }
 
@@ -1340,7 +1363,7 @@ onUnmounted(() => {
   height: 40px;
   border-radius: var(--radius-full);
   border: none;
-  background: var(--glass-bg-strong);
+  background: #1a1a1a;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1348,13 +1371,13 @@ onUnmounted(() => {
   transition: all var(--transition-normal);
   z-index: var(--z-base);
   color: var(--text-secondary);
-  border: 1px solid var(--glass-border);
+  border: 1px solid #333;
 }
 
 .toggle-dialog-btn:hover,
 .model-switch-btn:hover {
   transform: scale(1.1);
-  background: var(--glass-bg);
+  background: #2a2a2a;
 }
 
 .toggle-dialog-btn.active {
