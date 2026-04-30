@@ -115,6 +115,14 @@
             <path d="M11 1L1 11M11 5L5 11M11 9L9 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
         </div>
+        <button
+          class="close-btn"
+          @click.stop="closePet"
+          title="退出桌宠"
+          aria-label="退出桌宠"
+        >
+          <X :size="14" />
+        </button>
       </div>
 
       <div class="button-row" :style="{ transform: `translateY(-50%) scale(${petScale})`, transformOrigin: 'left center' }">
@@ -592,6 +600,22 @@ function cleanupLive2D() {
   if (app) {
     app.destroy(true, { children: true, texture: true, baseTexture: true });
     app = null;
+  }
+}
+
+function closePet() {
+  // 清理资源
+  cleanupLive2D();
+  
+  // 如果是 Electron 环境，关闭窗口
+  if (window.electronAPI && window.electronAPI.closeWindow) {
+    window.electronAPI.closeWindow();
+  } else {
+    // 浏览器环境，隐藏桌宠或刷新页面
+    const petContainer = document.querySelector('.desktop-pet-wrapper');
+    if (petContainer) {
+      petContainer.style.display = 'none';
+    }
   }
 }
 
@@ -1315,15 +1339,43 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   cursor: nwse-resize;
-  opacity: 0.4;
+  opacity: 0.7;
   transition: opacity 0.2s ease;
-  color: #666;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  border: 2px solid #fff;
+  border-radius: 4px;
   z-index: 10;
 }
 
 .resize-handle:hover {
   opacity: 1;
-  color: #333;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.close-btn {
+  position: absolute;
+  top: 4px;
+  right: 28px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.2s ease;
+  color: #fff;
+  background: rgba(255, 0, 0, 0.6);
+  border: 2px solid #fff;
+  border-radius: 4px;
+  z-index: 10;
+  padding: 0;
+}
+
+.close-btn:hover {
+  opacity: 1;
+  background: rgba(255, 0, 0, 0.8);
 }
 
 #live2d-canvas {
