@@ -11,13 +11,26 @@
         <div
           v-show="showDialog"
           class="dialog-bubble glass-card"
+          :class="{ expanded: isDialogExpanded, dragging: isDialogDragging }"
+          :style="{ left: dialogX + 'px', top: dialogY + 'px' }"
           ref="dialogBubble"
         >
-          <div class="bubble-header">
+          <div class="bubble-header" @mousedown="startDialogDrag">
             <span class="bubble-title">DesktopClaw</span>
-            <button class="bubble-close" @click="showDialog = false" aria-label="关闭对话框">
-              <X :size="14" />
-            </button>
+            <div class="bubble-header-btns">
+              <button 
+                class="bubble-expand-btn" 
+                @click.stop="toggleDialogSize"
+                :title="isDialogExpanded ? '缩小' : '放大'"
+                :aria-label="isDialogExpanded ? '缩小对话框' : '放大对话框'"
+              >
+                <Maximize2 :size="14" v-if="!isDialogExpanded" />
+                <Minimize2 :size="14" v-else />
+              </button>
+              <button class="bubble-close" @click.stop="showDialog = false" aria-label="关闭对话框">
+                <X :size="14" />
+              </button>
+            </div>
           </div>
           <div class="bubble-messages" ref="messagesRef">
             <div
@@ -191,6 +204,37 @@
                 placeholder="gpt-4o-mini"
               />
             </div>
+            <div class="settings-field">
+              <label class="settings-label">角色性格</label>
+              <div class="personality-options">
+                <button
+                  v-for="option in personalityOptions"
+                  :key="option.value"
+                  :class="['personality-btn', { active: personality === option.value }]"
+                  @click="personality = option.value"
+                  :title="option.description"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </div>
+            <div class="settings-field">
+              <label class="settings-label">生日</label>
+              <input
+                v-model="birthday"
+                type="date"
+                class="settings-input"
+              />
+            </div>
+            <div class="settings-field">
+              <label class="settings-label">自定义提示词</label>
+              <textarea
+                v-model="customPrompt"
+                class="settings-textarea"
+                placeholder="留空则使用默认提示词"
+                rows="4"
+              />
+            </div>
             <button class="settings-save-btn" @click="saveSettings">
               保存设置
             </button>
@@ -243,7 +287,9 @@ import {
   Check,
   Wrench,
   Volume2,
-  Settings
+  Settings,
+  Maximize2,
+  Minimize2
 } from 'lucide-vue-next';
 
 marked.setOptions({
@@ -271,6 +317,15 @@ const audioChunks = ref([]);
 const showDialog = ref(false);
 const dialogBubble = ref(null);
 const petContainer = ref(null);
+
+const isDialogExpanded = ref(false);
+const isDialogDragging = ref(false);
+const dialogX = ref(100);
+const dialogY = ref(100);
+const dialogDragStartX = ref(0);
+const dialogDragStartY = ref(0);
+const dialogDragStartMouseX = ref(0);
+const dialogDragStartMouseY = ref(0);
 
 const live2dCanvas = ref(null);
 const isModelLoaded = ref(false);
@@ -302,9 +357,187 @@ const DEFAULT_API_URL = "http://127.0.0.1:3000";
 const storedBaseUrl = localStorage.getItem('pet_base_url') || DEFAULT_API_URL;
 const storedApiKey = localStorage.getItem('pet_api_key') || '';
 const storedModelId = localStorage.getItem('pet_model_id') || '';
+const storedPersonality = localStorage.getItem('pet_personality') || 'gentle';
 const baseUrl = ref(storedBaseUrl);
 const apiKey = ref(storedApiKey);
 const modelId = ref(storedModelId);
+const personality = ref(storedPersonality);
+const storedBirthday = localStorage.getItem('pet_birthday') || '';
+const birthday = ref(storedBirthday);
+const storedCustomPrompt = localStorage.getItem('pet_custom_prompt') || '';
+const customPrompt = ref(storedCustomPrompt);
+
+const personalityOptions = [
+  { value: 'gentle', label: '温柔', description: '说话温柔体贴' },
+  { value: 'active', label: '活泼', description: '活泼开朗' },
+  { value: 'tsundere', label: '傲娇', description: '口是心非' },
+];
+
+const reminderMessages = {
+  morning: {
+    wakeup: {
+      gentle: '早安呀～新的一天开始啦，伸个懒腰起床吧，记得喝一杯温水唤醒身体哦',
+      active: '叮！你的专属叫醒服务已上线！快起床快起床，太阳都晒屁股啦～',
+      tsundere: '喂，还睡呢？再不起床上班/上学就要迟到了，我可不会等你哦',
+    },
+    breakfast: {
+      gentle: '早餐是一天中最重要的一餐，再忙也要记得吃点东西呀',
+      active: '干饭时间到！早餐吃什么？包子油条还是牛奶面包？快告诉我！',
+      tsundere: '哼，我才不是关心你呢，只是不吃早餐会胃疼，到时候别赖我没提醒你',
+    },
+   出门: {
+      gentle: '出门前记得检查一下钥匙、手机和钱包，还有今天的天气哦',
+      active: '出发出发！今天也要元气满满地度过呀！',
+      tsundere: '喂，东西都带齐了吗？丢三落四的，我可不会帮你捡东西',
+    },
+  },
+  forenoon: {
+    work: {
+      gentle: '开始工作/学习啦，先整理一下今天的任务清单吧',
+      active: '冲鸭！今天也要努力搬砖/好好学习呀！',
+      tsundere: '别发呆了，赶紧干活，不然晚上又要加班了',
+    },
+    snack: {
+      gentle: '工作/学习了一个多小时了，休息一下吧，吃点小零食补充能量',
+      active: '摸鱼时间到！快起来活动活动，顺便吃点好吃的～',
+      tsundere: '喂，都坐了一上午了，再不动弹就要长肉肉了',
+    },
+  },
+  noon: {
+    lunch: {
+      gentle: '中午好呀，该吃午饭了，记得荤素搭配，营养均衡哦',
+      active: '干饭人干饭魂！干饭时间到！冲啊！',
+      tsundere: '终于到吃饭时间了，再不吃我都要饿扁了',
+    },
+    nap: {
+      gentle: '吃完午饭休息一会儿吧，小憩20分钟下午会更有精神哦',
+      active: '午睡时间到！闭上眼睛休息一下吧，我会帮你看着时间的',
+      tsundere: '赶紧睡会儿，不然下午打瞌睡被老板/老师抓到我可不管',
+    },
+  },
+  afternoon: {
+    work: {
+      gentle: '午休结束啦，洗把脸清醒一下，继续下午的工作/学习吧',
+      active: '睡醒啦睡醒啦！下午也要加油哦！',
+      tsundere: '别睡了别睡了，再睡一天就过去了',
+    },
+    tea: {
+      gentle: '下午有点困了吧？喝杯咖啡或者茶，再吃点小点心吧',
+      active: '下午茶时间到！让我们一起补充能量，再战一下午！',
+      tsundere: '喂，都快睡着了吧？起来喝点东西提提神',
+    },
+    offWork: {
+      gentle: '今天辛苦啦，收拾一下东西准备回家吧',
+      active: '解放啦解放啦！终于可以回家啦！',
+      tsundere: '终于下班了，再不走我就自己先溜了',
+    },
+  },
+  evening: {
+    dinner: {
+      gentle: '晚上好呀，该吃晚饭了，不要吃太油腻的东西哦',
+      active: '晚餐时间到！今天晚上吃什么好吃的呀？',
+      tsundere: '赶紧吃饭，不然一会儿又要吃夜宵了',
+    },
+    exercise: {
+      gentle: '吃完饭休息一会儿，起来运动一下吧，散步或者做瑜伽都可以哦',
+      active: '生命在于运动！快起来动一动，甩掉一天的疲惫～',
+      tsundere: '喂，吃完就躺着，你是猪吗？赶紧起来运动',
+    },
+    bedtime: {
+      gentle: '时间不早了，准备洗漱睡觉吧，放下手机，让眼睛休息一下',
+      active: '洗漱时间到！刷刷牙洗洗脸，舒舒服服睡个好觉～',
+      tsundere: '别玩手机了，赶紧去洗漱，不然明天又起不来了',
+    },
+  },
+  midnight: {
+    stayUp: {
+      gentle: '已经十一点了，该睡觉了，熬夜对身体不好哦',
+      active: '很晚啦很晚啦！快睡觉快睡觉，不然会有黑眼圈的！',
+      tsundere: '喂，还不睡？想秃头吗？赶紧给我睡觉去',
+    },
+    forcedSleep: {
+      gentle: '已经十二点了，真的该睡觉了，明天还要早起呢',
+      active: '晚安晚安！再不睡觉我就要生气了哦！',
+      tsundere: '我警告你，现在立刻马上睡觉，不然我就不理你了',
+    },
+    lateWork: {
+      gentle: '都一点了，别再工作/学习了，身体最重要，先睡觉吧',
+      active: '救命啊！你怎么还不睡觉？再这样下去身体会垮掉的！',
+      tsundere: '你是铁打的吗？都一点了还不睡觉，我都困死了',
+    },
+  },
+  periodic: {
+    drinkWater: {
+      gentle: '该喝水啦，多喝水对身体好哦',
+      active: '咕嘟咕嘟～喝水时间到！快喝一大杯水！',
+      tsundere: '喂，喝水了，别等渴了才喝',
+    },
+    move: {
+      gentle: '坐了一个小时了，起来活动一下吧，伸伸胳膊踢踢腿',
+      active: '起来动一动！扭扭脖子扭扭腰，预防颈椎病～',
+      tsundere: '再坐下去就要变成石头了，赶紧起来活动',
+    },
+    eyeCare: {
+      gentle: '看屏幕看了两个小时了，看看远处，让眼睛休息一下吧',
+      active: '护眼时间到！闭上眼睛休息5分钟，或者看看窗外的绿色植物～',
+      tsundere: '眼睛不要了吗？赶紧看看远处，别一直盯着屏幕',
+    },
+    longSit: {
+      gentle: '你已经连续坐了两个小时了，起来走一走，倒杯水或者上个厕所吧',
+      active: '久坐伤身！快起来溜达溜达，不然屁股会变大的！',
+      tsundere: '你是粘在椅子上了吗？赶紧起来走两步',
+    },
+  },
+  special: {
+    phoneTime: {
+      gentle: '你已经看了一个小时手机了，放下手机休息一下吧',
+      active: '手机有什么好看的？看看我呀！快放下手机！',
+      tsundere: '再看手机眼睛就要瞎了，赶紧放下',
+    },
+    forgetMeal: {
+      gentle: '你是不是忘记吃饭了？再忙也要按时吃饭呀',
+      active: '干饭时间都过了！你怎么还不吃饭？快饿死了吗？',
+      tsundere: '连饭都忘记吃，你还能记得什么？赶紧去吃饭',
+    },
+    yawn: {
+      gentle: '困了吗？如果太累了就休息一会儿吧',
+      active: '哈哈，你打哈欠了！是不是困啦？',
+      tsundere: '困了就去睡，别硬撑着',
+    },
+    completeTask: {
+      gentle: '太棒了！你完成了今天的任务，奖励自己休息一下吧',
+      active: '哇塞！你太厉害了！任务完成！',
+      tsundere: '哼，终于完成了，还不算太笨',
+    },
+    birthday: {
+      gentle: '今天是你的生日呀，祝你生日快乐！',
+      active: '生日快乐！今天要开心哦！',
+      tsundere: '喂，今天是你的生日，我可没忘哦',
+    },
+    holiday: {
+      gentle: '今天是{holiday}呀，祝你节日快乐！',
+      active: '{holiday}快乐！今天要开心哦！',
+      tsundere: '喂，今天是{holiday}，我可没忘哦',
+    },
+  },
+  random: [
+    '今天也要开心呀！',
+    '你在做什么呢？我一直在陪着你哦',
+    '累了就休息一下，不要太勉强自己',
+    '你今天真好看/真厉害！',
+    '有什么不开心的事情可以跟我说呀',
+    '我会一直陪着你的',
+  ],
+};
+
+let reminderTimers = [];
+let lastDrinkTime = Date.now();
+let lastMoveTime = Date.now();
+let lastEyeCareTime = Date.now();
+let lastRandomTime = Date.now();
+let continuousSitTime = Date.now();
+let phoneStartTime = 0;
+let isUsingPhone = false;
 
 const petContainerStyle = computed(() => ({
   left: petX.value + 'px',
@@ -645,7 +878,185 @@ function saveSettings() {
   localStorage.setItem('pet_base_url', baseUrl.value);
   localStorage.setItem('pet_api_key', apiKey.value);
   localStorage.setItem('pet_model_id', modelId.value);
+  localStorage.setItem('pet_personality', personality.value);
+  localStorage.setItem('pet_birthday', birthday.value);
+  localStorage.setItem('pet_custom_prompt', customPrompt.value);
   showSettings.value = false;
+}
+
+function getPersonalityMessage(messages) {
+  return messages[personality.value] || messages.gentle;
+}
+
+function addReminderMessage(message) {
+  if (!showDialog.value) {
+    showDialog.value = true;
+  }
+  messages.value.push({
+    role: 'ai',
+    content: message,
+  });
+  nextTick(() => {
+    scrollToBottom();
+  });
+}
+
+function scheduleDailyReminders() {
+  const now = new Date();
+  const hour = now.getHours();
+  const minute = now.getMinutes();
+
+  const scheduleReminder = (targetHour, targetMinute, messageKey, period) => {
+    const targetTime = new Date();
+    targetTime.setHours(targetHour, targetMinute, 0, 0);
+    
+    let delay = targetTime.getTime() - now.getTime();
+    if (delay < 0) {
+      targetTime.setDate(targetTime.getDate() + 1);
+      delay = targetTime.getTime() - now.getTime();
+    }
+
+    const timer = setTimeout(() => {
+      const messages = reminderMessages[period][messageKey];
+      if (messages) {
+        addReminderMessage(getPersonalityMessage(messages));
+      }
+      scheduleDailyReminders();
+    }, delay);
+
+    reminderTimers.push(timer);
+  };
+
+  if (hour < 6) {
+    scheduleReminder(6, 30, 'wakeup', 'morning');
+  } else if (hour < 7) {
+    scheduleReminder(7, 0, 'breakfast', 'morning');
+  } else if (hour < 7.5) {
+    scheduleReminder(7, 30, '出门', 'morning');
+  } else if (hour < 9) {
+    scheduleReminder(9, 0, 'work', 'forenoon');
+  } else if (hour < 10.5) {
+    scheduleReminder(10, 30, 'snack', 'forenoon');
+  } else if (hour < 12) {
+    scheduleReminder(12, 0, 'lunch', 'noon');
+  } else if (hour < 13) {
+    scheduleReminder(13, 0, 'nap', 'noon');
+  } else if (hour < 14) {
+    scheduleReminder(14, 0, 'work', 'afternoon');
+  } else if (hour < 15.5) {
+    scheduleReminder(15, 30, 'tea', 'afternoon');
+  } else if (hour < 17.5) {
+    scheduleReminder(17, 30, 'offWork', 'afternoon');
+  } else if (hour < 18) {
+    scheduleReminder(18, 0, 'dinner', 'evening');
+  } else if (hour < 19.5) {
+    scheduleReminder(19, 30, 'exercise', 'evening');
+  } else if (hour < 21.5) {
+    scheduleReminder(21, 30, 'bedtime', 'evening');
+  } else if (hour < 23) {
+    scheduleReminder(23, 0, 'stayUp', 'midnight');
+  } else if (hour < 24) {
+    scheduleReminder(0, 0, 'forcedSleep', 'midnight');
+  } else {
+    scheduleReminder(1, 0, 'lateWork', 'midnight');
+  }
+}
+
+function startPeriodicReminders() {
+  const drinkInterval = setInterval(() => {
+    const messages = reminderMessages.periodic.drinkWater;
+    addReminderMessage(getPersonalityMessage(messages));
+    lastDrinkTime = Date.now();
+  }, 60 * 60 * 1000);
+
+  const moveInterval = setInterval(() => {
+    const messages = reminderMessages.periodic.move;
+    addReminderMessage(getPersonalityMessage(messages));
+    lastMoveTime = Date.now();
+  }, 60 * 60 * 1000);
+
+  const eyeCareInterval = setInterval(() => {
+    const messages = reminderMessages.periodic.eyeCare;
+    addReminderMessage(getPersonalityMessage(messages));
+    lastEyeCareTime = Date.now();
+  }, 2 * 60 * 60 * 1000);
+
+  const randomInterval = setInterval(() => {
+    const randomMessages = reminderMessages.random;
+    const randomMessage = randomMessages[Math.floor(Math.random() * randomMessages.length)];
+    addReminderMessage(randomMessage);
+    lastRandomTime = Date.now();
+  }, (2 + Math.random()) * 60 * 60 * 1000);
+
+  reminderTimers.push(drinkInterval, moveInterval, eyeCareInterval, randomInterval);
+}
+
+function checkBirthday() {
+  if (!birthday.value) return;
+  
+  const now = new Date();
+  const todayMonth = now.getMonth() + 1;
+  const todayDay = now.getDate();
+  
+  const birthdayParts = birthday.value.split('-');
+  if (birthdayParts.length >= 2) {
+    const birthMonth = parseInt(birthdayParts[1]);
+    const birthDay = parseInt(birthdayParts[2]);
+    
+    if (birthMonth === todayMonth && birthDay === todayDay) {
+      const messages = reminderMessages.special.birthday;
+      addReminderMessage(getPersonalityMessage(messages));
+    }
+  }
+}
+
+function clearAllReminders() {
+  reminderTimers.forEach(timer => clearTimeout(timer));
+  reminderTimers = [];
+}
+
+function startReminderSystem() {
+  clearAllReminders();
+  scheduleDailyReminders();
+  startPeriodicReminders();
+  checkBirthday();
+}
+
+function toggleDialogSize() {
+  isDialogExpanded.value = !isDialogExpanded.value;
+  if (isDialogExpanded.value) {
+    dialogX.value = window.innerWidth * 0.25;
+    dialogY.value = window.innerHeight * 0.25;
+  }
+}
+
+function startDialogDrag(e) {
+  if (e.target.closest('.bubble-header-btns')) return;
+  
+  isDialogDragging.value = true;
+  dialogDragStartX.value = dialogX.value;
+  dialogDragStartY.value = dialogY.value;
+  dialogDragStartMouseX.value = e.clientX;
+  dialogDragStartMouseY.value = e.clientY;
+  
+  document.addEventListener('mousemove', onDialogDrag);
+  document.addEventListener('mouseup', stopDialogDrag);
+}
+
+function onDialogDrag(e) {
+  if (!isDialogDragging.value) return;
+  
+  const dx = e.clientX - dialogDragStartMouseX.value;
+  const dy = e.clientY - dialogDragStartMouseY.value;
+  
+  dialogX.value = dialogDragStartX.value + dx;
+  dialogY.value = dialogDragStartY.value + dy;
+}
+
+function stopDialogDrag() {
+  isDialogDragging.value = false;
+  document.removeEventListener('mousemove', onDialogDrag);
+  document.removeEventListener('mouseup', stopDialogDrag);
 }
 
 async function switchModel(modelPath) {
@@ -809,13 +1220,20 @@ const sendToAI = async (message) => {
       const sendOptions = {};
       if (modelId.value) sendOptions.modelId = modelId.value;
       if (apiKey.value) sendOptions.apiKey = apiKey.value;
+      if (personality.value) sendOptions.personality = personality.value;
+      if (customPrompt.value) sendOptions.customPrompt = customPrompt.value;
       data = await window.electronAPI.sendMessage(message, sendOptions);
     } else {
       const headers = { "Content-Type": "application/json" };
       if (apiKey.value) {
         headers["Authorization"] = `Bearer ${apiKey.value}`;
       }
-      const requestBody = { message, modelId: modelId.value || undefined };
+      const requestBody = { 
+        message, 
+        modelId: modelId.value || undefined,
+        personality: personality.value,
+        customPrompt: customPrompt.value || undefined 
+      };
       const response = await fetch(`${baseUrl.value}/chat`, {
         method: "POST",
         headers,
@@ -966,11 +1384,13 @@ onMounted(() => {
   window.addEventListener('mouseup', onMouseUp);
   setClickThrough(true);
   scanModels();
+  setTimeout(startReminderSystem, 1000);
 });
 
 onUnmounted(() => {
   disconnectFeishuSSE();
   cleanupLive2D();
+  clearAllReminders();
   window.removeEventListener('mousemove', onMouseMove);
   window.removeEventListener('mouseup', onMouseUp);
 });
@@ -1004,17 +1424,26 @@ onUnmounted(() => {
 
 /* ===== 对话框气泡 - Glassmorphism + Indigo ===== */
 .dialog-bubble {
-  position: absolute;
-  right: 100%;
-  top: 50%;
-  transform: translateY(-50%);
-  margin-right: 20px;
+  position: fixed;
   width: 340px;
   max-height: 420px;
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  z-index: 1000;
+  transition: width 0.3s ease, height 0.3s ease;
+}
+
+.dialog-bubble.expanded {
+  width: 50vw;
+  height: 50vh;
+  max-height: 50vh;
+}
+
+.dialog-bubble.dragging {
+  transition: none;
+  cursor: move;
 }
 
 .bubble-header {
@@ -1024,6 +1453,14 @@ onUnmounted(() => {
   padding: var(--space-md) var(--space-lg);
   background: var(--accent-indigo);
   border-bottom: 1px solid var(--glass-border);
+  cursor: move;
+  user-select: none;
+}
+
+.bubble-header-btns {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
 }
 
 .bubble-title {
@@ -1031,6 +1468,24 @@ onUnmounted(() => {
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: 0.5px;
+}
+
+.bubble-expand-btn {
+  background: rgba(255, 255, 255, 0.15);
+  border: none;
+  color: var(--text-primary);
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition-fast);
+}
+
+.bubble-expand-btn:hover {
+  background: rgba(255, 255, 255, 0.25);
 }
 
 .bubble-close {
@@ -1059,6 +1514,10 @@ onUnmounted(() => {
   min-height: 60px;
   scroll-behavior: smooth;
   background: var(--bg-secondary);
+}
+
+.dialog-bubble.expanded .bubble-messages {
+  max-height: none;
 }
 
 .bubble-messages::-webkit-scrollbar {
@@ -1696,6 +2155,8 @@ onUnmounted(() => {
   transform: translateY(-50%);
   margin-right: 20px;
   width: 280px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
   z-index: 1001;
 }
 
@@ -1704,6 +2165,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
+  background: var(--bg-secondary);
 }
 
 .settings-field {
@@ -1734,6 +2196,23 @@ onUnmounted(() => {
   border-color: var(--accent-amber);
 }
 
+.settings-textarea {
+  padding: 8px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s ease;
+  resize: vertical;
+}
+
+.settings-textarea:focus {
+  border-color: var(--accent-amber);
+}
+
 .settings-save-btn {
   padding: 8px 16px;
   background: var(--accent-amber);
@@ -1748,6 +2227,35 @@ onUnmounted(() => {
 
 .settings-save-btn:hover {
   opacity: 0.85;
+}
+
+.personality-options {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.personality-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.personality-btn:hover {
+  background: var(--glass-bg-strong);
+  border-color: var(--accent-amber);
+}
+
+.personality-btn.active {
+  background: var(--accent-amber);
+  color: white;
+  border-color: var(--accent-amber);
 }
 
 .settings-btn {
