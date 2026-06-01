@@ -69,7 +69,8 @@ class AgentLoop:
         self.channels_config = channels_config
         self.provider = provider
         self.workspace = workspace
-        self.model = model or provider.get_default_model()
+        logger.info(f"[AgentLoop.__init__] model param: {model}, provider.get_default_model(): {provider.get_default_model()}")
+        self.model = model if model else provider.get_default_model()
         self.max_iterations = max_iterations
         self.context_window_tokens = context_window_tokens
         self.brave_api_key = brave_api_key
@@ -179,6 +180,11 @@ class AgentLoop:
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        personality: str | None = None,
+        custom_prompt: str | None = None,
     ) -> tuple[str | None, list[str], list[dict]]:
         """Run the agent iteration loop."""
         messages = initial_messages
@@ -191,11 +197,23 @@ class AgentLoop:
 
             tool_defs = self.tools.get_definitions()
 
-            response = await self.provider.chat_with_retry(
-                messages=messages,
-                tools=tool_defs,
-                model=self.model,
-            )
+            chat_model = model or self.model
+            logger.info(f"[_run_agent_loop] model param: {model}, self.model: {self.model}, chat_model: {chat_model}")
+            chat_kwargs = {
+                "messages": messages,
+                "tools": tool_defs,
+                "model": chat_model,
+            }
+            if api_key:
+                chat_kwargs["api_key"] = api_key
+            if api_base:
+                chat_kwargs["api_base"] = api_base
+            if personality:
+                chat_kwargs["personality"] = personality
+            if custom_prompt:
+                chat_kwargs["custom_prompt"] = custom_prompt
+            
+            response = await self.provider.chat_with_retry(**chat_kwargs)
 
             if response.has_tool_calls:
                 if on_progress:
@@ -337,6 +355,11 @@ class AgentLoop:
         msg: InboundMessage,
         session_key: str | None = None,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        personality: str | None = None,
+        custom_prompt: str | None = None,
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
         # System messages: parse origin from chat_id ("channel:chat_id")
@@ -423,8 +446,10 @@ class AgentLoop:
                 channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
             ))
 
+        logger.info(f"[_process_message] Calling _run_agent_loop with model={model}, api_key={api_key}, api_base={api_base}")
         final_content, _, all_msgs = await self._run_agent_loop(
             initial_messages, on_progress=on_progress or _bus_progress,
+            model=model, api_key=api_key, api_base=api_base, personality=personality, custom_prompt=custom_prompt,
         )
 
         if final_content is None:
@@ -486,9 +511,16 @@ class AgentLoop:
         channel: str = "cli",
         chat_id: str = "direct",
         on_progress: Callable[[str], Awaitable[None]] | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        personality: str | None = None,
+        custom_prompt: str | None = None,
     ) -> str:
         """Process a message directly (for CLI or cron usage)."""
         await self._connect_mcp()
         msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
-        response = await self._process_message(msg, session_key=session_key, on_progress=on_progress)
+        response = await self._process_message(msg, session_key=session_key, on_progress=on_progress, 
+                                               model=model, api_key=api_key, api_base=api_base, 
+                                               personality=personality, custom_prompt=custom_prompt)
         return response.content if response else ""

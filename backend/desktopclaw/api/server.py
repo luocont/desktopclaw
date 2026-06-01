@@ -668,16 +668,21 @@ class APIServer:
 
         message = data.get('message', '')
         channel = data.get('channel', 'api')
-        print(f"[API] Processing message: {message[:50]}... (channel={channel})")
+        model_id = data.get('modelId')
+        api_key = data.get('apiKey')
+        api_base = data.get('baseUrl')
+        personality = data.get('personality')
+        custom_prompt = data.get('customPrompt')
+        print(f"[API] Processing message: {message[:50]}... (channel={channel}, model={model_id}, api_base={api_base})")
 
         if wants_streaming:
-            await self._send_streaming_response(writer, message, channel)
+            await self._send_streaming_response(writer, message, channel, model_id, api_key, api_base, personality, custom_prompt)
         else:
-            await self._send_standard_response(writer, message, channel)
+            await self._send_standard_response(writer, message, channel, model_id, api_key, api_base, personality, custom_prompt)
 
-    async def _send_streaming_response(self, writer, message, channel='api'):
+    async def _send_streaming_response(self, writer, message, channel='api', model_id=None, api_key=None, api_base=None, personality=None, custom_prompt=None):
         """Send streaming response with tool call updates via SSE."""
-        print(f"[API] Streaming response started for: {message[:50]}... (channel={channel})")
+        print(f"[API] Streaming response started for: {message[:50]}... (channel={channel}, model={model_id})")
 
         # Send SSE headers
         sse_headers = (
@@ -722,7 +727,12 @@ class APIServer:
                     session_key=f"api:frontend:{channel}",
                     channel=channel,
                     chat_id="frontend",
-                    on_progress=collect_progress
+                    on_progress=collect_progress,
+                    model=model_id,
+                    api_key=api_key,
+                    api_base=api_base,
+                    personality=personality,
+                    custom_prompt=custom_prompt
                 )
                 final_response[0] = response
                 response_received.set()
@@ -753,10 +763,10 @@ class APIServer:
 
         print(f"[API] Streaming response completed")
 
-    async def _send_standard_response(self, writer, message, channel='api'):
+    async def _send_standard_response(self, writer, message, channel='api', model_id=None, api_key=None, api_base=None, personality=None, custom_prompt=None):
         """Send non-streaming standard response."""
         try:
-            response = await self.process_message(message, channel)
+            response = await self.process_message(message, channel, model_id, api_key, api_base, personality, custom_prompt)
             result = {'success': True, 'response': response}
             response_body = json.dumps(result, ensure_ascii=False)
             print(f"[API] Response sent successful"  )
@@ -808,7 +818,7 @@ class APIServer:
             await self.server.wait_closed()
         print("API Server stopped")
 
-    async def process_message(self, message: str, channel: str = 'api') -> str:
+    async def process_message(self, message: str, channel: str = 'api', model_id=None, api_key=None, api_base=None, personality=None, custom_prompt=None) -> str:
         """Process a message through the agent and return the response."""
         response_future = asyncio.Future()
 
@@ -819,6 +829,11 @@ class APIServer:
                     session_key=f"api:frontend:{channel}",
                     channel=channel,
                     chat_id="frontend",
+                    model=model_id,
+                    api_key=api_key,
+                    api_base=api_base,
+                    personality=personality,
+                    custom_prompt=custom_prompt
                 )
                 if not response_future.done():
                     response_future.set_result(response)

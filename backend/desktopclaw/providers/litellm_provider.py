@@ -37,7 +37,7 @@ class LiteLLMProvider(LLMProvider):
         self,
         api_key: str | None = None,
         api_base: str | None = None,
-        default_model: str = "anthropic/claude-opus-4-5",
+        default_model: str = "deepseek/deepseek-v4-pro",
         extra_headers: dict[str, str] | None = None,
         provider_name: str | None = None,
     ):
@@ -215,6 +215,10 @@ class LiteLLMProvider(LLMProvider):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        personality: str | None = None,
+        custom_prompt: str | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request via LiteLLM.
@@ -225,16 +229,43 @@ class LiteLLMProvider(LLMProvider):
             model: Model identifier (e.g., 'anthropic/claude-sonnet-4-5').
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
+            api_key: Override API key for this request.
+            personality: Character personality for the response.
+            custom_prompt: Custom system prompt.
 
         Returns:
             LLMResponse with content and/or tool calls.
         """
         original_model = model or self.default_model
+        logger.info(f"[LiteLLM] Original model: {original_model}")
+        logger.info(f"[LiteLLM] Provider default_model: {self.default_model}")
+        logger.info(f"[LiteLLM] Gateway: {self._gateway.name if self._gateway else 'None'}")
         model = self._resolve_model(original_model)
+        logger.info(f"[LiteLLM] Resolved model: {model}")
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
         if self._supports_cache_control(original_model):
             messages, tools = self._apply_cache_control(messages, tools)
+
+        # Apply custom prompt and personality
+        if custom_prompt or personality:
+            personality_desc = ""
+            if personality == "gentle":
+                personality_desc = "温柔体贴，说话委婉"
+            elif personality == "active":
+                personality_desc = "活泼开朗，充满活力"
+            elif personality == "tsundere":
+                personality_desc = "傲娇，口是心非"
+            
+            system_content = custom_prompt or ""
+            if personality_desc:
+                if system_content:
+                    system_content = f"你是一个{personality_desc}的角色。{system_content}"
+                else:
+                    system_content = f"你是一个{personality_desc}的角色。"
+            
+            if system_content:
+                messages = [{"role": "system", "content": system_content}] + messages
 
         # Clamp max_tokens to at least 1 — negative or zero values cause
         # LiteLLM to reject the request with "max_tokens must be at least 1".
@@ -251,12 +282,16 @@ class LiteLLMProvider(LLMProvider):
         self._apply_model_overrides(model, kwargs)
 
         # Pass api_key directly — more reliable than env vars alone
-        if self.api_key:
-            kwargs["api_key"] = self.api_key
+        # Use request-level override if provided, else fallback to provider-level
+        effective_api_key = api_key or self.api_key
+        if effective_api_key:
+            kwargs["api_key"] = effective_api_key
 
         # Pass api_base for custom endpoints
-        if self.api_base:
-            kwargs["api_base"] = self.api_base
+        # Use request-level override if provided, else fallback to provider-level
+        effective_api_base = api_base or self.api_base
+        if effective_api_base:
+            kwargs["api_base"] = effective_api_base
 
         # Pass extra headers (e.g. APP-Code for AiHubMix)
         if self.extra_headers:
@@ -269,6 +304,11 @@ class LiteLLMProvider(LLMProvider):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+
+        logger.info(f"[LiteLLM] API Call Details:")
+        logger.info(f"  model: {kwargs.get('model')}")
+        logger.info(f"  api_base: {kwargs.get('api_base')}")
+        logger.info(f"  api_key: {kwargs.get('api_key', 'NOT SET')[:10] if kwargs.get('api_key') else 'NOT SET'}...")
 
         try:
             response = await acompletion(**kwargs)

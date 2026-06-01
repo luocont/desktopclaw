@@ -136,6 +136,13 @@
         >
           <X :size="14" />
         </button>
+        
+        <transition name="interaction-fade">
+          <div v-if="showInteractionBubble" class="interaction-bubble glass-card">
+            <div class="interaction-message">{{ interactionMessage }}</div>
+            <div class="interaction-arrow"></div>
+          </div>
+        </transition>
       </div>
 
       <div class="button-row" :style="{ transform: `translateY(-50%) scale(${petScale})`, transformOrigin: 'left center' }">
@@ -178,12 +185,12 @@
           </div>
           <div class="settings-form">
             <div class="settings-field">
-              <label class="settings-label">Base URL</label>
+              <label class="settings-label">API Base URL（LLM接口地址）</label>
               <input
                 v-model="baseUrl"
                 type="text"
                 class="settings-input"
-                placeholder="http://127.0.0.1:3000"
+                placeholder="留空使用默认值"
               />
             </div>
             <div class="settings-field">
@@ -327,6 +334,10 @@ const dialogDragStartY = ref(0);
 const dialogDragStartMouseX = ref(0);
 const dialogDragStartMouseY = ref(0);
 
+const showInteractionBubble = ref(false);
+const interactionMessage = ref('');
+let interactionTimer = null;
+
 const live2dCanvas = ref(null);
 const isModelLoaded = ref(false);
 const modelError = ref('');
@@ -354,7 +365,7 @@ const resizeStartY = ref(0);
 const resizeStartScale = ref(1);
 
 const DEFAULT_API_URL = "http://127.0.0.1:3000";
-const storedBaseUrl = localStorage.getItem('pet_base_url') || DEFAULT_API_URL;
+const storedBaseUrl = localStorage.getItem('pet_base_url') || '';
 const storedApiKey = localStorage.getItem('pet_api_key') || '';
 const storedModelId = localStorage.getItem('pet_model_id') || '';
 const storedPersonality = localStorage.getItem('pet_personality') || 'gentle';
@@ -889,16 +900,17 @@ function getPersonalityMessage(messages) {
 }
 
 function addReminderMessage(message) {
-  if (!showDialog.value) {
-    showDialog.value = true;
+  if (interactionTimer) {
+    clearTimeout(interactionTimer);
   }
-  messages.value.push({
-    role: 'ai',
-    content: message,
-  });
-  nextTick(() => {
-    scrollToBottom();
-  });
+  
+  interactionMessage.value = message;
+  showInteractionBubble.value = true;
+  
+  interactionTimer = setTimeout(() => {
+    showInteractionBubble.value = false;
+    interactionMessage.value = '';
+  }, 5000);
 }
 
 function scheduleDailyReminders() {
@@ -986,7 +998,7 @@ function startPeriodicReminders() {
     const randomMessage = randomMessages[Math.floor(Math.random() * randomMessages.length)];
     addReminderMessage(randomMessage);
     lastRandomTime = Date.now();
-  }, (2 + Math.random()) * 60 * 60 * 1000);
+  }, 60 * 1000);
 
   reminderTimers.push(drinkInterval, moveInterval, eyeCareInterval, randomInterval);
 }
@@ -1122,7 +1134,7 @@ const connectFeishuSSE = async () => {
     return;
   }
 
-  const es = new EventSource(`${baseUrl.value}/feishu/events`);
+  const es = new EventSource(`${baseUrl.value || DEFAULT_API_URL}/feishu/events`);
   eventSource.value = es;
   feishuConnected.value = true;
 
@@ -1220,6 +1232,7 @@ const sendToAI = async (message) => {
       const sendOptions = {};
       if (modelId.value) sendOptions.modelId = modelId.value;
       if (apiKey.value) sendOptions.apiKey = apiKey.value;
+      if (baseUrl.value) sendOptions.baseUrl = baseUrl.value;
       if (personality.value) sendOptions.personality = personality.value;
       if (customPrompt.value) sendOptions.customPrompt = customPrompt.value;
       data = await window.electronAPI.sendMessage(message, sendOptions);
@@ -1231,10 +1244,12 @@ const sendToAI = async (message) => {
       const requestBody = { 
         message, 
         modelId: modelId.value || undefined,
+        apiKey: apiKey.value || undefined,
+        baseUrl: baseUrl.value || undefined,
         personality: personality.value,
         customPrompt: customPrompt.value || undefined 
       };
-      const response = await fetch(`${baseUrl.value}/chat`, {
+      const response = await fetch(`${baseUrl.value || DEFAULT_API_URL}/chat`, {
         method: "POST",
         headers,
         body: JSON.stringify(requestBody),
@@ -1337,7 +1352,7 @@ const uploadAudio = async (audioBlob) => {
     formData.append('channel', 'feishu');
 
     const response = await axios.post(
-      `${API_URL}/audio/upload`,
+      `${baseUrl.value || DEFAULT_API_URL}/audio/upload`,
       formData,
       {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -1841,6 +1856,71 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   display: block;
+}
+
+.interaction-bubble {
+  position: absolute;
+  right: calc(100% + 3px);
+  top: 22%;
+  padding: 10px 14px;
+  max-width: 200px;
+  border-radius: var(--radius-lg);
+  background: rgba(30, 30, 50, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+}
+
+.interaction-message {
+  font-size: var(--font-size-sm);
+  color: #ffffff;
+  line-height: 1.6;
+  text-align: left;
+  width: 110px;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.interaction-arrow {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 8px solid var(--glass-bg-strong);
+}
+
+.interaction-fade-enter-active {
+  animation: interactionIn 0.3s ease-out;
+}
+
+.interaction-fade-leave-active {
+  animation: interactionOut 0.2s ease-in;
+}
+
+@keyframes interactionIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes interactionOut {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
 }
 
 .live2d-loading {
