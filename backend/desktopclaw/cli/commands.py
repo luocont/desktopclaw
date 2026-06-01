@@ -34,6 +34,7 @@ from desktopclaw import __logo__, __version__
 from desktopclaw.config.paths import get_workspace_path
 from desktopclaw.config.schema import Config
 from desktopclaw.utils.helpers import sync_workspace_templates
+from loguru import logger
 
 app = typer.Typer(
     name="nanobot",
@@ -269,6 +270,8 @@ def _make_provider(config: Config):
     model = config.agents.defaults.model
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
+    logger.info(f"[_make_provider] model: {model}, provider_name: {provider_name}")
+    logger.info(f"[_make_provider] p: {p}")
 
     # OpenAI Codex (OAuth)
     if provider_name == "openai_codex" or model.startswith("openai-codex/"):
@@ -302,7 +305,7 @@ def _make_provider(config: Config):
             console.print("Set one in ~/.nanobot/config.json under providers section")
             raise typer.Exit(1)
         provider = LiteLLMProvider(
-            api_key=p.api_key if p else None,
+            api_key=p.api_key if p and p.api_key else None,
             api_base=config.get_api_base(model),
             default_model=model,
             extra_headers=p.extra_headers if p else None,

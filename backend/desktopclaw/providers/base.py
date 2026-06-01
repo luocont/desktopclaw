@@ -167,6 +167,10 @@ class LLMProvider(ABC):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        personality: str | None = None,
+        custom_prompt: str | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request.
@@ -198,6 +202,10 @@ class LLMProvider(ABC):
         temperature: object = _SENTINEL,
         reasoning_effort: object = _SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        personality: str | None = None,
+        custom_prompt: str | None = None,
     ) -> LLMResponse:
         """Call chat() with retry on transient provider failures.
 
@@ -222,6 +230,10 @@ class LLMProvider(ABC):
                     temperature=temperature,
                     reasoning_effort=reasoning_effort,
                     tool_choice=tool_choice,
+                    api_key=api_key,
+                    api_base=api_base,
+                    personality=personality,
+                    custom_prompt=custom_prompt,
                 )
             except asyncio.CancelledError:
                 raise
@@ -255,6 +267,10 @@ class LLMProvider(ABC):
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
                 tool_choice=tool_choice,
+                api_key=api_key,
+                api_base=api_base,
+                personality=personality,
+                custom_prompt=custom_prompt,
             )
         except asyncio.CancelledError:
             raise
