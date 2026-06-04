@@ -2,12 +2,110 @@ const {app,BrowserWindow,ipcMain,shell} = require('electron')
 const path = require('path')
 const fs = require('fs')
 const http = require('http')
+const { spawn, execSync } = require('child_process')
 
 // 检测是否在开发模式：检查是否有 VITE 开发服务器运行，或通过环境变量
 const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev')
 
 let win
 let feishuSSEController = null
+let backendProcess = null
+
+// 获取资源路径，兼容开发和生产模式
+const getResourcePath = (relativePath) => {
+    if (isDev) {
+        return path.join(__dirname, '..', relativePath)
+    } else {
+        return path.join(process.resourcesPath, relativePath)
+    }
+}
+
+// 递归杀死进程树（Windows 用 taskkill /t，Unix 用 SIGTERM）
+function killProcessTree(proc) {
+    if (!proc || !proc.pid) return
+    try {
+        if (process.platform === 'win32') {
+            execSync(`taskkill /f /t /pid ${proc.pid}`, { stdio: 'ignore', timeout: 3000 })
+        } else {
+            proc.kill('SIGTERM')
+        }
+    } catch {}
+}
+
+const startBackend = () => {
+    return new Promise((resolve, reject) => {
+        let backendPath
+        let args
+        let cwd
+        
+        if (isDev) {
+            backendPath = 'python'
+            args = ['-m', 'desktopclaw', 'api', '--port', '3000']
+            cwd = path.join(__dirname, '..', '..')
+        } else {
+            backendPath = path.join(getResourcePath('backend'), 'desktopclaw.exe')
+            args = []
+            cwd = undefined
+        }
+
+        console.log('[Electron] Starting backend:', backendPath, args, 'cwd:', cwd)
+
+        backendProcess = spawn(backendPath, args, {
+            detached: false,
+            cwd: cwd,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            shell: true,
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8', LANG: 'en_US.UTF-8' }
+        })
+
+        backendProcess.stdout.on('data', (data) => {
+            process.stdout.write(Buffer.from(`[Backend] ${data.toString('utf8').trim()}\n`, 'utf8'))
+        })
+
+        backendProcess.stderr.on('data', (data) => {
+            process.stdout.write(Buffer.from(`[Backend Error] ${data.toString('utf8').trim()}\n`, 'utf8'))
+        })
+
+        backendProcess.on('close', (code) => {
+            console.log('[Electron] Backend process closed with code:', code)
+            backendProcess = null
+        })
+
+        backendProcess.on('error', (err) => {
+            console.error('[Electron] Failed to start backend:', err)
+            reject(err)
+        })
+
+        const checkBackendReady = (attempt) => {
+            if (attempt > 60) {
+                reject(new Error('Backend failed to start within 60 seconds'))
+                return
+            }
+
+            const req = http.request({
+                hostname: '127.0.0.1',
+                port: 3000,
+                path: '/health',
+                method: 'GET'
+            }, (res) => {
+                if (res.statusCode === 200) {
+                    console.log('[Electron] Backend is ready')
+                    resolve()
+                } else {
+                    setTimeout(() => checkBackendReady(attempt + 1), 1000)
+                }
+            })
+
+            req.on('error', () => {
+                setTimeout(() => checkBackendReady(attempt + 1), 1000)
+            })
+
+            req.end()
+        }
+
+        setTimeout(() => checkBackendReady(0), 2000)
+    })
+}
 
 const createWindow = () => {
     if(win)return
@@ -43,16 +141,31 @@ const createWindow = () => {
     
     //win.loadFile('../index.html')
     if (isDev) {
-        win.loadURL('http://localhost:5173')
-        // 如需调试可取消下面这行注释：
-        // win.webContents.openDevTools()
+        const vitePort = process.env.VITE_PORT || '5173'
+        win.loadURL(`http://localhost:${vitePort}`)
       } else {
-        win.loadFile(path.join(__dirname, '../dist/index.html'))
+        win.loadFile(path.join(getResourcePath('dist'), 'index.html'))
       }
 }
 
-app.on('ready', () => {
+app.on('ready', async () => {
+    try {
+        console.log('[Electron] Starting backend service...')
+        await startBackend()
+        console.log('[Electron] Backend started successfully')
+    } catch (err) {
+        console.error('[Electron] Failed to start backend:', err)
+    }
     createWindow()
+})
+
+// will-quit 在 app.exit(0) 时触发，确保后端进程被杀死
+app.on('will-quit', () => {
+    if (backendProcess) {
+        console.log('[Electron] Killing backend process tree (will-quit)...')
+        killProcessTree(backendProcess)
+        backendProcess = null
+    }
 })
 
 app.on('window-all-closed',() => {
@@ -61,6 +174,18 @@ app.on('window-all-closed',() => {
 
 app.on('activate',()=>{
     if(BrowserWindow.getAllWindows().length === 0)createWindow()
+})
+
+// IPC handler: 前端点击"退出桌宠"后关闭整个应用
+ipcMain.handle('close-window', () => {
+    console.log('[Electron] Close requested from frontend, shutting down all processes...')
+    // app.exit() 不会触发 will-quit，必须在此先杀后端再退出
+    if (backendProcess) {
+        console.log('[Electron] Killing backend process tree (close-window)...')
+        killProcessTree(backendProcess)
+        backendProcess = null
+    }
+    app.exit(0)
 })
 
 // IPC handler for setting ignore mouse events (click-through)
@@ -204,7 +329,7 @@ ipcMain.handle('disconnect-feishu-sse', async (event) => {
 
 // IPC handler for scanning available Live2D models in public directory
 ipcMain.handle('scan-live2d-models', async (event) => {
-    const publicDir = path.join(__dirname, '../public')
+    const publicDir = getResourcePath('public')
     
     try {
         if (!fs.existsSync(publicDir)) {
@@ -229,7 +354,11 @@ ipcMain.handle('scan-live2d-models', async (event) => {
             }
         }
 
-        console.log(`[Electron] Found ${models.length} Live2D models:`, models.map(m => m.name))
+        const modelNames = models.map(m => m.name)
+        console.log(`[Electron] Found ${models.length} Live2D models`)
+        for (const name of modelNames) {
+            process.stdout.write(Buffer.from(`  - ${name}\n`, 'utf8'))
+        }
         return { success: true, models }
 
     } catch (error) {

@@ -84,6 +84,13 @@ class APIServer:
                 await self._handle_feishu_sse(writer)
                 return
 
+            # Handle health check
+            if method == 'GET' and path == '/health':
+                response = self._http_response(200, json.dumps({'status': 'ok'}))
+                writer.write(response.encode())
+                await writer.drain()
+                return
+
             # Handle media files
             if method == 'GET' and path.startswith('/media/'):
                 await self._handle_media_request(writer, path[7:])

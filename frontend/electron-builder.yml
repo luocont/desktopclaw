@@ -1,0 +1,15 @@
+appId: com.example.desktopclaw
+productName: DesktopClaw
+directories:
+  output: electron-build
+files:
+  - dist/**/*
+  - electron/**/*
+  - public/**/*
+  - node_modules/**/*
+extraResources:
+  - from: backend/desktopclaw
+    to: backend
+win:
+  target: portable
+  icon: null

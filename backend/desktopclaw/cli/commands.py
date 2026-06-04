@@ -616,21 +616,21 @@ def api(
             # Start API server
             api_server = await start_api_server(agent_loop, bus, port)
 
-            console.print(f"[green]✓[/green] API Server started on http://127.0.0.1:{port}")
-            console.print("[dim]Press Ctrl+C to stop[/dim]\n")
+            print(f"[API] Server started on http://127.0.0.1:{port}")
+            print("[API] Press Ctrl+C to stop\n")
 
             # Keep running
             while True:
                 await asyncio.sleep(1)
 
         except KeyboardInterrupt:
-            console.print("\n[yellow]Shutting down...[/yellow]")
+            print("\n[API] Shutting down...")
         finally:
             await api_server.stop()
             agent_loop.stop()
             await agent_task
             await agent_loop.close_mcp()
-            console.print("[green]✓[/green] Server stopped")
+            print("[API] Server stopped")
 
     asyncio.run(run())
 
