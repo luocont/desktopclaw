@@ -122,15 +122,6 @@ function getDisplaysUnionBounds() {
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
 }
 
-// 动态调整窗口覆盖所有显示器
-function resizeWindowToAllDisplays() {
-    if (!win || win.isDestroyed()) return
-    const unionBounds = getDisplaysUnionBounds()
-    win.setBounds({ x: unionBounds.x, y: unionBounds.y, width: unionBounds.width, height: unionBounds.height })
-    // 通知前端屏幕信息已更新
-    win.webContents.send('screen-info-updated', getScreenInfoData())
-}
-
 // 获取屏幕信息数据
 function getScreenInfoData() {
     const displays = screen.getAllDisplays()
@@ -151,18 +142,25 @@ function getScreenInfoData() {
 
 const createWindow = () => {
     if(win)return
-    const unionBounds = getDisplaysUnionBounds()
-    console.log('[Electron] Displays union bounds:', JSON.stringify(unionBounds))
+    // 获取主显示器信息，用于初始窗口位置
+    const primary = screen.getPrimaryDisplay()
+    const workArea = primary.workArea
+    const petW = 300, petH = 400
+    // 初始位置：主屏右下角
+    const initX = workArea.x + workArea.width - petW - 50
+    const initY = workArea.y + workArea.height - petH - 50
+
+    console.log('[Electron] Creating pet window at:', initX, initY, 'size:', petW, petH)
 
     win = new BrowserWindow({
-        width: unionBounds.width,
-        height: unionBounds.height,
-        x: unionBounds.x,
-        y: unionBounds.y,
+        width: petW,
+        height: petH,
+        x: initX,
+        y: initY,
         transparent: true,
         frame: false,
         alwaysOnTop: true,
-        resizable: true,  // 必须为true，否则Windows限制窗口大小为主屏
+        resizable: true,
         skipTaskbar: true,
         autoHideMenuBar: true,
         webPreferences: {
@@ -173,32 +171,11 @@ const createWindow = () => {
         }
     })
 
-    // 创建后强制设置大小，覆盖系统限制
-    win.setBounds({ x: unionBounds.x, y: unionBounds.y, width: unionBounds.width, height: unionBounds.height })
-
-    // 调试：打印窗口实际大小
-    const actualBounds = win.getBounds()
-    console.log('[Electron] Actual window bounds after setBounds:', JSON.stringify(actualBounds))
-    console.log('[Electron] Window content size:', win.getContentSize())
-
-    // 页面加载完成后获取渲染进程的窗口信息
-    win.webContents.on('did-finish-load', () => {
-        win.webContents.executeJavaScript('JSON.stringify({innerWidth: window.innerWidth, innerHeight: window.innerHeight, devicePixelRatio: window.devicePixelRatio, screenW: screen.width, screenH: screen.height})').then(result => {
-            console.log('[Electron] Renderer window info:', result)
-        })
-
-        // 延迟检查DOM状态
-        setTimeout(() => {
-            win.webContents.executeJavaScript(`JSON.stringify({
-                petWrapper: document.querySelector('.desktop-pet-wrapper') ? {w: document.querySelector('.desktop-pet-wrapper').offsetWidth, h: document.querySelector('.desktop-pet-wrapper').offsetHeight} : null,
-                petContainer: document.querySelector('.pet-container') ? {left: document.querySelector('.pet-container').style.left, top: document.querySelector('.pet-container').style.top, w: document.querySelector('.pet-container').offsetWidth, h: document.querySelector('.pet-container').offsetHeight} : null,
-                live2dWrapper: document.querySelector('.live2d-wrapper') ? {w: document.querySelector('.live2d-wrapper').offsetWidth, h: document.querySelector('.live2d-wrapper').offsetHeight} : null,
-                canvas: document.querySelector('#live2d-canvas') ? {w: document.querySelector('#live2d-canvas').width, h: document.querySelector('#live2d-canvas').height} : null,
-                isModelLoaded: document.querySelector('.live2d-loading') ? document.querySelector('.live2d-loading').textContent : 'no-loading-el'
-            })`).then(result => {
-                console.log('[Electron] DOM state:', result)
-            })
-        }, 3000)
+    // 捕获渲染进程的 console.log
+    win.webContents.on('console-message', (event, level, message) => {
+        if (message.includes('[Frontend]')) {
+            console.log('[Renderer]', message)
+        }
     })
 
     // 修改 CSP 以允许加载本地媒体文件和连接后端
@@ -219,10 +196,23 @@ const createWindow = () => {
         win.loadFile(path.join(getResourcePath('dist'), 'index.html'))
       }
 
-    // 监听显示器变化（热插拔、分辨率改变等）
-    screen.on('display-added', () => resizeWindowToAllDisplays())
-    screen.on('display-removed', () => resizeWindowToAllDisplays())
-    screen.on('display-metrics-changed', () => resizeWindowToAllDisplays())
+    // 监听显示器变化
+    screen.on('display-added', () => {
+        // 通知前端屏幕信息已更新
+        if (win && !win.isDestroyed()) {
+            win.webContents.send('screen-info-updated', getScreenInfoData())
+        }
+    })
+    screen.on('display-removed', () => {
+        if (win && !win.isDestroyed()) {
+            win.webContents.send('screen-info-updated', getScreenInfoData())
+        }
+    })
+    screen.on('display-metrics-changed', () => {
+        if (win && !win.isDestroyed()) {
+            win.webContents.send('screen-info-updated', getScreenInfoData())
+        }
+    })
 }
 
 app.on('ready', async () => {
@@ -277,6 +267,22 @@ ipcMain.handle('resize-pet-window', (event, x, y, width, height) => {
     if (win && !win.isDestroyed()) {
         win.setBounds({ x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) })
     }
+})
+
+// IPC handler for moving the pet window (drag)
+ipcMain.handle('move-pet-window', (event, x, y) => {
+    if (win && !win.isDestroyed()) {
+        win.setPosition(Math.round(x), Math.round(y))
+    }
+})
+
+// IPC handler for getting current window position
+ipcMain.handle('get-window-position', () => {
+    if (win && !win.isDestroyed()) {
+        const bounds = win.getBounds()
+        return { x: bounds.x, y: bounds.y }
+    }
+    return { x: 0, y: 0 }
 })
 
 // IPC handler for sending messages to backend

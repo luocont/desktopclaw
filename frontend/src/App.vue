@@ -12,7 +12,6 @@
           v-show="showDialog"
           class="dialog-bubble glass-card"
           :class="{ expanded: isDialogExpanded, dragging: isDialogDragging }"
-          :style="{ left: dialogX + 'px', top: dialogY + 'px' }"
           ref="dialogBubble"
         >
           <div class="bubble-header" @mousedown="startDialogDrag">
@@ -279,7 +278,7 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
 import * as PIXI from 'pixi.js';
 import { Live2DModel } from 'pixi-live2d-display/cubism4';
 import axios from 'axios';
@@ -327,8 +326,6 @@ const petContainer = ref(null);
 
 const isDialogExpanded = ref(false);
 const isDialogDragging = ref(false);
-const dialogX = ref(100);
-const dialogY = ref(100);
 const dialogDragStartX = ref(0);
 const dialogDragStartY = ref(0);
 const dialogDragStartMouseX = ref(0);
@@ -351,37 +348,62 @@ const showSettings = ref(false);
 
 const isDragging = ref(false);
 const dragMoved = ref(false);
-const startX = ref(0);
-const startY = ref(0);
-// 初始位置：先放在 (100, 100) 安全位置，等获取屏幕信息后再调整到主屏右下角
-const petX = ref(100);
-const petY = ref(100);
+// 拖拽时记录屏幕坐标和窗口位置
+const dragStartScreenX = ref(0);
+const dragStartScreenY = ref(0);
+const dragStartWindowX = ref(0);
+const dragStartWindowY = ref(0);
+
+// 桌宠在窗口内始终位于 (0, 0)，不再需要 petX/petY 定位
+const petX = ref(0);
+const petY = ref(0);
 
 // 多屏幕信息
 const screenInfo = ref(null);
+
+// 窗口大小管理：根据对话框状态动态调整窗口大小
+const updateWindowSize = async () => {
+  if (!window.electronAPI || !window.electronAPI.resizePetWindow) return;
+  
+  const petW = currentPetWidth.value;
+  const petH = currentPetHeight.value;
+  let windowW = petW;
+  let windowH = petH;
+  
+  // 如果对话框展开，窗口需要包含对话框
+  if (showDialog.value && dialogBubble.value) {
+    const dialogRect = dialogBubble.value.getBoundingClientRect();
+    windowH = Math.max(windowH, dialogRect.bottom);
+    windowW = Math.max(windowW, dialogRect.right);
+  }
+  
+  // 获取当前窗口位置
+  const pos = await window.electronAPI.getWindowPosition();
+  await window.electronAPI.resizePetWindow(pos.x, pos.y, Math.round(windowW), Math.round(windowH));
+};
 
 const initScreenInfo = async () => {
   if (window.electronAPI && window.electronAPI.getScreenInfo) {
     try {
       const info = await window.electronAPI.getScreenInfo();
       screenInfo.value = info;
-
-      // 获取到屏幕信息后，将桌宠移到主屏右下角
-      const primary = info.displays.find(d => d.isPrimary)
-      if (primary) {
-        const workArea = primary.workArea
-        // 将屏幕坐标转为窗口内坐标
-        // 窗口起始位置是联合边界的 (x, y)，桌宠位置是相对于窗口的
-        const unionX = Math.min(...info.displays.map(d => d.bounds.x))
-        const unionY = Math.min(...info.displays.map(d => d.bounds.y))
-        petX.value = (workArea.x + workArea.width - 380) - unionX
-        petY.value = (workArea.y + workArea.height - 500) - unionY
-      }
+      // 窗口位置已由主进程设置，无需再调整
     } catch (e) {
       console.error('[Frontend] Failed to get screen info:', e);
     }
   }
 };
+
+// 监听对话框状态变化，动态调整窗口大小
+watch(showDialog, async (val) => {
+  await nextTick();
+  setTimeout(updateWindowSize, 50);
+});
+
+watch(isDialogExpanded, async (val) => {
+  await nextTick();
+  setTimeout(updateWindowSize, 50);
+});
 
 const updateScreenInfo = (info) => {
   screenInfo.value = info;
@@ -583,8 +605,8 @@ let phoneStartTime = 0;
 let isUsingPhone = false;
 
 const petContainerStyle = computed(() => ({
-  left: petX.value + 'px',
-  top: petY.value + 'px',
+  left: '0px',
+  top: '0px',
   width: currentPetWidth.value + 'px',
   height: currentPetHeight.value + 'px',
 }));
@@ -643,6 +665,7 @@ function onPetAreaEnter() {
 
 function onPetAreaLeave() {
   isHoveringPet.value = false;
+  console.log('[Frontend] onPetAreaLeave, isDragging:', isDragging.value);
   if (!isDragging.value) {
     setClickThrough(true);
   }
@@ -1068,20 +1091,22 @@ function startReminderSystem() {
 
 function toggleDialogSize() {
   isDialogExpanded.value = !isDialogExpanded.value;
-  if (isDialogExpanded.value) {
-    dialogX.value = window.innerWidth * 0.25;
-    dialogY.value = window.innerHeight * 0.25;
-  }
 }
 
 function startDialogDrag(e) {
   if (e.target.closest('.bubble-header-btns')) return;
   
   isDialogDragging.value = true;
-  dialogDragStartX.value = dialogX.value;
-  dialogDragStartY.value = dialogY.value;
-  dialogDragStartMouseX.value = e.clientX;
-  dialogDragStartMouseY.value = e.clientY;
+  // 记录鼠标屏幕坐标和窗口位置
+  dialogDragStartMouseX.value = e.screenX;
+  dialogDragStartMouseY.value = e.screenY;
+  // 获取当前窗口位置（异步）
+  if (window.electronAPI && window.electronAPI.getWindowPosition) {
+    window.electronAPI.getWindowPosition().then(pos => {
+      dialogDragStartX.value = pos.x;
+      dialogDragStartY.value = pos.y;
+    });
+  }
   
   document.addEventListener('mousemove', onDialogDrag);
   document.addEventListener('mouseup', stopDialogDrag);
@@ -1090,11 +1115,15 @@ function startDialogDrag(e) {
 function onDialogDrag(e) {
   if (!isDialogDragging.value) return;
   
-  const dx = e.clientX - dialogDragStartMouseX.value;
-  const dy = e.clientY - dialogDragStartMouseY.value;
+  const dx = e.screenX - dialogDragStartMouseX.value;
+  const dy = e.screenY - dialogDragStartMouseY.value;
+  const newX = dialogDragStartX.value + dx;
+  const newY = dialogDragStartY.value + dy;
   
-  dialogX.value = dialogDragStartX.value + dx;
-  dialogY.value = dialogDragStartY.value + dy;
+  // 移动窗口
+  if (window.electronAPI && window.electronAPI.movePetWindow) {
+    window.electronAPI.movePetWindow(newX, newY);
+  }
 }
 
 function stopDialogDrag() {
@@ -1110,11 +1139,19 @@ async function switchModel(modelPath) {
   await loadModel();
 }
 
-const startDrag = (e) => {
+const startDrag = async (e) => {
   isDragging.value = true;
   dragMoved.value = false;
-  startX.value = e.clientX - petX.value;
-  startY.value = e.clientY - petY.value;
+  // 记录鼠标的屏幕坐标
+  dragStartScreenX.value = e.screenX;
+  dragStartScreenY.value = e.screenY;
+  // 获取当前窗口位置
+  if (window.electronAPI && window.electronAPI.getWindowPosition) {
+    const pos = await window.electronAPI.getWindowPosition();
+    dragStartWindowX.value = pos.x;
+    dragStartWindowY.value = pos.y;
+  }
+  setClickThrough(false);
   e.preventDefault();
 };
 
@@ -1124,20 +1161,30 @@ const onMouseMove = (e) => {
     return;
   }
   if (!isDragging.value) return;
+  if (e.buttons !== 1) {
+    isDragging.value = false;
+    setClickThrough(true);
+    return;
+  }
   dragMoved.value = true;
 
-  let newX = e.clientX - startX.value;
-  let newY = e.clientY - startY.value;
+  // 计算鼠标在屏幕上的位移
+  const dx = e.screenX - dragStartScreenX.value;
+  const dy = e.screenY - dragStartScreenY.value;
+  const newX = dragStartWindowX.value + dx;
+  const newY = dragStartWindowY.value + dy;
 
-  newX = Math.max(0, Math.min(newX, window.innerWidth - 100));
-  newY = Math.max(0, Math.min(newY, window.innerHeight - 100));
-
-  petX.value = newX;
-  petY.value = newY;
+  // 移动窗口（OS 自然处理屏幕边界）
+  if (window.electronAPI && window.electronAPI.movePetWindow) {
+    window.electronAPI.movePetWindow(newX, newY);
+  }
 };
 
-const onMouseUp = () => {
-  isDragging.value = false;
+const onMouseUp = (e) => {
+  if (isDragging.value) {
+    isDragging.value = false;
+    setClickThrough(true);
+  }
   onResizeUp();
 };
 
@@ -1461,7 +1508,7 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   background: transparent;
-  overflow: hidden;
+  overflow: visible;
   position: relative;
 }
 
@@ -1478,7 +1525,10 @@ onUnmounted(() => {
 
 /* ===== 对话框气泡 - Glassmorphism + Indigo ===== */
 .dialog-bubble {
-  position: fixed;
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 8px;
   width: 340px;
   max-height: 420px;
   border-radius: var(--radius-lg);
@@ -1490,7 +1540,7 @@ onUnmounted(() => {
 }
 
 .dialog-bubble.expanded {
-  width: 50vw;
+  width: min(50vw, 600px);
   height: 50vh;
   max-height: 50vh;
 }
@@ -1790,14 +1840,13 @@ onUnmounted(() => {
 
 .bubble-arrow {
   position: absolute;
-  right: -8px;
-  top: 50%;
-  transform: translateY(-50%);
+  left: 30px;
+  top: -8px;
   width: 0;
   height: 0;
-  border-top: 8px solid transparent;
-  border-bottom: 8px solid transparent;
-  border-left: 8px solid var(--glass-bg);
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-bottom: 8px solid var(--glass-bg);
 }
 
 .bubble-fade-enter-active {
