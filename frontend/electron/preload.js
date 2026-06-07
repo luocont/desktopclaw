@@ -14,5 +14,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setIgnoreMouseEvents: (ignore, options) => ipcRenderer.invoke('set-ignore-mouse-events', ignore, options),
   scanLive2DModels: () => ipcRenderer.invoke('scan-live2d-models'),
   resizePetWindow: (x, y, width, height) => ipcRenderer.invoke('resize-pet-window', x, y, width, height),
-  closeWindow: () => ipcRenderer.invoke('close-window')
+  closeWindow: () => ipcRenderer.invoke('close-window'),
+
+  // 多屏幕支持
+  getScreenInfo: () => ipcRenderer.invoke('get-screen-info'),
+  onScreenInfoUpdated: (callback) => {
+    ipcRenderer.on('screen-info-updated', (event, data) => callback(data))
+  },
+  removeScreenInfoListener: () => {
+    ipcRenderer.removeAllListeners('screen-info-updated')
+  }
 })

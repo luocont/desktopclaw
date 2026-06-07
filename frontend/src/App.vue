@@ -353,8 +353,40 @@ const isDragging = ref(false);
 const dragMoved = ref(false);
 const startX = ref(0);
 const startY = ref(0);
-const petX = ref(window.innerWidth - 380);
-const petY = ref(window.innerHeight - 500);
+// 初始位置：先放在 (100, 100) 安全位置，等获取屏幕信息后再调整到主屏右下角
+const petX = ref(100);
+const petY = ref(100);
+
+// 多屏幕信息
+const screenInfo = ref(null);
+
+const initScreenInfo = async () => {
+  if (window.electronAPI && window.electronAPI.getScreenInfo) {
+    try {
+      const info = await window.electronAPI.getScreenInfo();
+      screenInfo.value = info;
+
+      // 获取到屏幕信息后，将桌宠移到主屏右下角
+      const primary = info.displays.find(d => d.isPrimary)
+      if (primary) {
+        const workArea = primary.workArea
+        // 将屏幕坐标转为窗口内坐标
+        // 窗口起始位置是联合边界的 (x, y)，桌宠位置是相对于窗口的
+        const unionX = Math.min(...info.displays.map(d => d.bounds.x))
+        const unionY = Math.min(...info.displays.map(d => d.bounds.y))
+        petX.value = (workArea.x + workArea.width - 380) - unionX
+        petY.value = (workArea.y + workArea.height - 500) - unionY
+      }
+    } catch (e) {
+      console.error('[Frontend] Failed to get screen info:', e);
+    }
+  }
+};
+
+const updateScreenInfo = (info) => {
+  screenInfo.value = info;
+  console.log('[Frontend] Screen info updated:', JSON.stringify(info));
+};
 
 const isHoveringPet = ref(false);
 
@@ -1400,6 +1432,10 @@ onMounted(() => {
   setClickThrough(true);
   scanModels();
   setTimeout(startReminderSystem, 1000);
+  initScreenInfo();
+  if (window.electronAPI && window.electronAPI.onScreenInfoUpdated) {
+    window.electronAPI.onScreenInfoUpdated(updateScreenInfo);
+  }
 });
 
 onUnmounted(() => {
@@ -1408,6 +1444,9 @@ onUnmounted(() => {
   clearAllReminders();
   window.removeEventListener('mousemove', onMouseMove);
   window.removeEventListener('mouseup', onMouseUp);
+  if (window.electronAPI && window.electronAPI.removeScreenInfoListener) {
+    window.electronAPI.removeScreenInfoListener();
+  }
 });
 </script>
 
@@ -1419,8 +1458,8 @@ onUnmounted(() => {
 }
 
 .desktop-pet-wrapper {
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
   background: transparent;
   overflow: hidden;
   position: relative;
