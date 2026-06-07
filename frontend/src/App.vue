@@ -405,6 +405,12 @@ watch(isDialogExpanded, async (val) => {
   setTimeout(updateWindowSize, 50);
 });
 
+// 缩放桌宠时也更新窗口大小
+watch(petScale, async () => {
+  await nextTick();
+  setTimeout(updateWindowSize, 50);
+});
+
 const updateScreenInfo = (info) => {
   screenInfo.value = info;
   console.log('[Frontend] Screen info updated:', JSON.stringify(info));
