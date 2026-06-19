@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from desktopclaw.bus.events import InboundMessage
+from desktopclaw.config.loader import load_config, save_config
 from desktopclaw.config.paths import get_media_dir
 
 
@@ -89,6 +90,14 @@ class APIServer:
                 response = self._http_response(200, json.dumps({'status': 'ok'}))
                 writer.write(response.encode())
                 await writer.drain()
+                return
+
+            # Handle settings (load/save frontend persona + provider overrides)
+            if method == 'GET' and path == '/settings':
+                await self._handle_get_settings(writer)
+                return
+            if method == 'POST' and path == '/settings':
+                await self._handle_set_settings(reader, writer, headers)
                 return
 
             # Handle media files
@@ -381,6 +390,108 @@ class APIServer:
             import traceback
             traceback.print_exc()
             response = self._http_response(500, json.dumps({'error': str(e)}))
+            writer.write(response.encode())
+            await writer.drain()
+
+    async def _handle_get_settings(self, writer):
+        """Return the frontend-relevant settings subset (camelCase)."""
+        try:
+            config = load_config()
+            defaults = config.agents.defaults
+            custom = config.providers.custom
+            feishu = config.channels.feishu
+            payload = {
+                'baseUrl': custom.api_base or '',
+                'modelId': defaults.model,
+                'fastModelId': defaults.fast_model or '',
+                'apiKey': custom.api_key or '',
+                'personality': defaults.personality,
+                'customPrompt': defaults.custom_prompt,
+                'birthday': defaults.birthday,
+                'feishu': {
+                    'asrEnabled': feishu.asr_enabled,
+                    'ttsEnabled': feishu.tts_enabled,
+                    'ttsVoice': feishu.tts_voice,
+                },
+            }
+            response = self._http_response(200, json.dumps(payload, ensure_ascii=False))
+            writer.write(response.encode())
+            await writer.drain()
+        except Exception as e:
+            print(f"[API] Error reading settings: {e}")
+            body = json.dumps({'success': False, 'error': str(e)})
+            response = self._http_response(500, body)
+            writer.write(response.encode())
+            await writer.drain()
+
+    async def _handle_set_settings(self, reader, writer, headers):
+        """Persist frontend-supplied settings to the config file.
+
+        Accepts camelCase keys matching the GET response. Only whitelisted
+        fields are written; unknown keys are ignored.
+        """
+        try:
+            content_length = int(headers.get('content-length', 0))
+            if content_length <= 0:
+                body = json.dumps({'success': False, 'error': 'Empty body'})
+                response = self._http_response(400, body)
+                writer.write(response.encode())
+                await writer.drain()
+                return
+
+            raw = await reader.read(content_length)
+            try:
+                data = json.loads(raw.decode('utf-8'))
+            except json.JSONDecodeError as e:
+                body = json.dumps({'success': False, 'error': f'Invalid JSON: {e}'})
+                response = self._http_response(400, body)
+                writer.write(response.encode())
+                await writer.drain()
+                return
+
+            config = load_config()
+            defaults = config.agents.defaults
+            custom = config.providers.custom
+            feishu = config.channels.feishu
+
+            # Scalars
+            if 'modelId' in data and isinstance(data['modelId'], str):
+                defaults.model = data['modelId']
+            if 'fastModelId' in data and isinstance(data['fastModelId'], str):
+                defaults.fast_model = data['fastModelId']
+            if 'baseUrl' in data and isinstance(data['baseUrl'], str):
+                custom.api_base = data['baseUrl'] or None
+            if 'apiKey' in data and isinstance(data['apiKey'], str):
+                custom.api_key = data['apiKey']
+            if 'personality' in data and isinstance(data['personality'], str):
+                defaults.personality = data['personality']
+            if 'customPrompt' in data and isinstance(data['customPrompt'], str):
+                defaults.custom_prompt = data['customPrompt']
+            if 'birthday' in data and isinstance(data['birthday'], str):
+                defaults.birthday = data['birthday']
+
+            # Feishu voice sub-settings
+            feishu_in = data.get('feishu')
+            if isinstance(feishu_in, dict):
+                if 'asrEnabled' in feishu_in and isinstance(feishu_in['asrEnabled'], bool):
+                    feishu.asr_enabled = feishu_in['asrEnabled']
+                if 'ttsEnabled' in feishu_in and isinstance(feishu_in['ttsEnabled'], bool):
+                    feishu.tts_enabled = feishu_in['ttsEnabled']
+                if 'ttsVoice' in feishu_in and isinstance(feishu_in['ttsVoice'], str):
+                    feishu.tts_voice = feishu_in['ttsVoice']
+
+            save_config(config)
+            print(f"[API] Settings saved (model={defaults.model}, fast_model={defaults.fast_model}, personality={defaults.personality})")
+            body = json.dumps({'success': True})
+            response = self._http_response(200, body)
+            writer.write(response.encode())
+            await writer.drain()
+        except Exception as e:
+            print(f"[API] Error saving settings: {e}")
+            import traceback
+            traceback.print_exc()
+            body = json.dumps({'success': False, 'error': str(e)})
+            response = self._http_response(500, body)
             writer.write(response.encode())
             await writer.drain()
 
@@ -794,8 +905,8 @@ class APIServer:
             f"Content-Type: application/json; charset=utf-8\r\n"
             f"Content-Length: {len(body.encode('utf-8'))}\r\n"
             f"Access-Control-Allow-Origin: *\r\n"
-            f"Access-Control-Allow-Methods: POST, OPTIONS\r\n"
-            f"Access-Control-Allow-Headers: Content-Type\r\n"
+            f"Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+            f"Access-Control-Allow-Headers: Content-Type, Authorization, Accept\r\n"
             f"\r\n"
             f"{body}"
         )
@@ -805,8 +916,8 @@ class APIServer:
         return (
             f"HTTP/1.1 {status_code} OK\r\n"
             f"Access-Control-Allow-Origin: *\r\n"
-            f"Access-Control-Allow-Methods: POST, OPTIONS\r\n"
-            f"Access-Control-Allow-Headers: Content-Type\r\n"
+            f"Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+            f"Access-Control-Allow-Headers: Content-Type, Authorization, Accept\r\n"
             f"Content-Length: 0\r\n"
             f"\r\n"
         )

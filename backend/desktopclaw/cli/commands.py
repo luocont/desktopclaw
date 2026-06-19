@@ -396,9 +396,11 @@ def gateway(
         provider=provider,
         workspace=config.workspace_path,
         model=config.agents.defaults.model,
+        fast_model=config.agents.defaults.fast_model,
         max_iterations=config.agents.defaults.max_tool_iterations,
         context_window_tokens=config.agents.defaults.context_window_tokens,
-        brave_api_key=config.tools.web.search.api_key or None,
+        search_config=config.tools.web.search,
+        research_config=config.tools.web.research,
         web_proxy=config.tools.web.proxy or None,
         exec_config=config.tools.exec,
         cron_service=cron,
@@ -573,6 +575,7 @@ def api(
     from desktopclaw.agent.loop import AgentLoop
     from desktopclaw.api.server import start_api_server
     from desktopclaw.bus.queue import MessageBus
+    from desktopclaw.channels.manager import ChannelManager
     from desktopclaw.config.paths import get_cron_dir
     from desktopclaw.cron.service import CronService
 
@@ -597,9 +600,11 @@ def api(
         provider=provider,
         workspace=config.workspace_path,
         model=config.agents.defaults.model,
+        fast_model=config.agents.defaults.fast_model,
         max_iterations=config.agents.defaults.max_tool_iterations,
         context_window_tokens=config.agents.defaults.context_window_tokens,
-        brave_api_key=config.tools.web.search.api_key or None,
+        search_config=config.tools.web.search,
+        research_config=config.tools.web.research,
         web_proxy=config.tools.web.proxy or None,
         exec_config=config.tools.exec,
         cron_service=cron,
@@ -608,27 +613,47 @@ def api(
         channels_config=config.channels,
     )
 
+    channels = ChannelManager(config, bus)
+    if channels.enabled_channels:
+        print(f"[API] Channels enabled: {', '.join(channels.enabled_channels)}")
+
     async def run():
+        api_server = None
+        agent_task = None
+        channel_task = None
         try:
-            # Start agent loop
             agent_task = asyncio.create_task(agent_loop.run())
 
-            # Start API server
             api_server = await start_api_server(agent_loop, bus, port)
+
+            if hasattr(api_server, "broadcast_feishu_inbound"):
+                channels.set_inbound_callback(api_server.broadcast_feishu_inbound)
+            if hasattr(api_server, "broadcast_feishu_outbound"):
+                channels.set_outbound_callback(api_server.broadcast_feishu_outbound)
+
+            channel_task = asyncio.create_task(channels.start_all())
 
             print(f"[API] Server started on http://127.0.0.1:{port}")
             print("[API] Press Ctrl+C to stop\n")
 
-            # Keep running
             while True:
                 await asyncio.sleep(1)
 
         except KeyboardInterrupt:
             print("\n[API] Shutting down...")
         finally:
-            await api_server.stop()
+            if api_server:
+                await api_server.stop()
             agent_loop.stop()
-            await agent_task
+            await channels.stop_all()
+            if channel_task:
+                channel_task.cancel()
+                try:
+                    await channel_task
+                except asyncio.CancelledError:
+                    pass
+            if agent_task:
+                await agent_task
             await agent_loop.close_mcp()
             print("[API] Server stopped")
 
@@ -673,9 +698,11 @@ def agent(
         provider=provider,
         workspace=config.workspace_path,
         model=config.agents.defaults.model,
+        fast_model=config.agents.defaults.fast_model,
         max_iterations=config.agents.defaults.max_tool_iterations,
         context_window_tokens=config.agents.defaults.context_window_tokens,
-        brave_api_key=config.tools.web.search.api_key or None,
+        search_config=config.tools.web.search,
+        research_config=config.tools.web.research,
         web_proxy=config.tools.web.proxy or None,
         exec_config=config.tools.exec,
         cron_service=cron,

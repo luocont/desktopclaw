@@ -1,1509 +1,268 @@
 <template>
-  <div class="desktop-pet-wrapper">
+  <!--
+    Bug #1: hover detection used to be on `.pet-container`, which sits at
+    petWidth × petHeight only. The chat bubble is positioned `top: 100%`
+    (i.e. *outside* that container), so moving the cursor onto the bubble
+    fired `mouseleave` → click-through ON → bubble was unclickable.
+    Hooking the listeners onto the wrapper makes any visible UI inside the
+    Electron window count as "interactive".
+  -->
+  <div
+    class="desktop-pet-wrapper"
+    ref="wrapperEl"
+    @mouseenter="onPetAreaEnter"
+    @mouseleave="onPetAreaLeave"
+  >
     <div
-      class="pet-container"
-      ref="petContainer"
-      :style="petContainerStyle"
-      @mouseenter="onPetAreaEnter"
-      @mouseleave="onPetAreaLeave"
+      class="pet-row"
+      ref="petRow"
+      :style="{ height: live2d.petHeight() + 'px' }"
     >
-      <transition name="bubble-fade">
-        <div
-          v-show="showDialog"
-          class="dialog-bubble glass-card"
-          :class="{ expanded: isDialogExpanded, dragging: isDialogDragging }"
-          ref="dialogBubble"
-        >
-          <div class="bubble-header" @mousedown="startDialogDrag">
-            <span class="bubble-title">DesktopClaw</span>
-            <div class="bubble-header-btns">
-              <button 
-                class="bubble-expand-btn" 
-                @click.stop="toggleDialogSize"
-                :title="isDialogExpanded ? '缩小' : '放大'"
-                :aria-label="isDialogExpanded ? '缩小对话框' : '放大对话框'"
-              >
-                <Maximize2 :size="14" v-if="!isDialogExpanded" />
-                <Minimize2 :size="14" v-else />
-              </button>
-              <button class="bubble-close" @click.stop="showDialog = false" aria-label="关闭对话框">
-                <X :size="14" />
-              </button>
-            </div>
-          </div>
-          <div class="bubble-messages" ref="messagesRef">
-            <div
-              v-for="(msg, index) in messages"
-              :key="index"
-              :class="[
-                'bubble-message',
-                msg.role === 'user' ? 'bubble-user' : 'bubble-ai',
-              ]"
-            >
-              <div class="bubble-message-content">
-                <template v-if="msg.isToolCall">
-                  <div class="tool-call-indicator">
-                    <Wrench :size="14" class="tool-icon" />
-                    <span class="tool-text">{{ msg.content }}</span>
-                  </div>
-                </template>
-                <template v-else-if="msg.isThinking">
-                  <div class="thinking-indicator">
-                    <span class="thinking-dots">{{ msg.content }}</span>
-                  </div>
-                </template>
-                <template v-else-if="msg.audioPath">
-                  <div class="audio-message">
-                    <Mic :size="16" class="audio-icon" />
-                    <audio controls class="audio-player">
-                      <source :src="msg.audioPath" type="audio/ogg; codecs=opus">
-                    </audio>
-                  </div>
-                </template>
-                <template v-else-if="msg.ttsAudioPath">
-                  <div class="tts-message">
-                    <Volume2 :size="16" class="tts-icon" />
-                    <audio controls class="audio-player">
-                      <source :src="msg.ttsAudioPath" type="audio/mpeg">
-                    </audio>
-                  </div>
-                </template>
-                <template v-else-if="msg.role === 'ai' || msg.role === 'assistant'">
-                  <div class="markdown-body" v-html="renderMarkdown(msg.content)"></div>
-                </template>
-                <template v-else>{{ msg.content }}</template>
-              </div>
-            </div>
-          </div>
-          <div class="bubble-input">
-            <input
-              v-model="inputValue"
-              @keyup.enter="sendMessage"
-              placeholder="和我说点什么..."
-              :disabled="loading || isRecording"
-              class="bubble-input-field"
-            />
-            <button
-              @click="sendMessage"
-              :disabled="loading || !inputValue.trim() || isRecording"
-              class="bubble-send-btn"
-              aria-label="发送消息"
-            >
-              <Send :size="16" v-if="!loading" />
-              <span v-else class="loading-dots">...</span>
-            </button>
-            <button
-              @mousedown="startRecording"
-              @mouseup="stopRecording"
-              @mouseleave="stopRecording"
-              @touchstart.prevent="startRecording"
-              @touchend.prevent="stopRecording"
-              :disabled="loading"
-              :class="['bubble-record-btn', { recording: isRecording }]"
-              :aria-label="isRecording ? '停止录音' : '开始录音'"
-            >
-              <Mic :size="16" />
-            </button>
-          </div>
-          <div class="bubble-arrow"></div>
-        </div>
-      </transition>
+      <ModelPicker
+        :visible="showModelPicker"
+        @close="showModelPicker = false"
+        @pick="onPickModel"
+        @opened="onPanelOpened"
+        ref="modelPickerRef"
+      />
+
+      <SettingsPanel
+        :visible="showSettings"
+        @close="showSettings = false"
+        @opened="onPanelOpened"
+        ref="settingsPanelRef"
+      />
 
       <div
-        class="live2d-wrapper"
-        :style="live2dWrapperStyle"
-        @mousedown="startDrag"
+        class="pet-container"
+        ref="petContainer"
+        :style="petContainerStyle"
       >
-        <canvas ref="live2dCanvas" id="live2d-canvas"></canvas>
-        <div v-if="!isModelLoaded" class="live2d-loading">
-          {{ modelError || '加载中...' }}
-        </div>
-        <div
-          class="resize-handle"
-          @mousedown.stop="startResize"
-          title="拖动缩放"
-        >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-            <path d="M11 1L1 11M11 5L5 11M11 9L9 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-        </div>
-        <button
-          class="close-btn"
-          @click.stop="closePet"
-          title="退出桌宠"
-          aria-label="退出桌宠"
-        >
-          <X :size="14" />
-        </button>
-        
-        <transition name="interaction-fade">
-          <div v-if="showInteractionBubble" class="interaction-bubble glass-card">
-            <div class="interaction-message">{{ interactionMessage }}</div>
-            <div class="interaction-arrow"></div>
-          </div>
-        </transition>
+        <ChatPanel
+          :visible="showDialog"
+          :expanded="isDialogExpanded"
+          @close="showDialog = false"
+          @toggleExpand="isDialogExpanded = !isDialogExpanded"
+          @sized="onDialogSized"
+          ref="chatPanelRef"
+        />
+
+        <Live2DStage @close="closePet" ref="live2dStageRef" />
+
+        <ControlButtons
+          :scale="live2d.petScale.value"
+          :dialog="showDialog"
+          :modelPicker="showModelPicker"
+          :settings="showSettings"
+          @toggle="onTogglePanel"
+        />
       </div>
-
-      <div class="button-row" :style="{ transform: `translateY(-50%) scale(${petScale})`, transformOrigin: 'left center' }">
-        <button
-          class="toggle-dialog-btn"
-          @click.stop="showModelPicker = false; showSettings = false; showDialog = !showDialog"
-          :class="{ active: showDialog }"
-          title="打开对话框"
-          :aria-label="showDialog ? '关闭对话框' : '打开对话框'"
-        >
-          <MessageCircle :size="Math.round(20 * petScale)" />
-        </button>
-        <button
-          class="model-switch-btn"
-          @click.stop="showDialog = false; showSettings = false; showModelPicker = !showModelPicker"
-          :class="{ active: showModelPicker }"
-          title="更换皮肤"
-          :aria-label="showModelPicker ? '关闭皮肤选择' : '打开皮肤选择'"
-        >
-          <Palette :size="Math.round(20 * petScale)" />
-        </button>
-        <button
-          class="settings-btn"
-          @click.stop="showDialog = false; showModelPicker = false; showSettings = !showSettings"
-          :class="{ active: showSettings }"
-          title="设置"
-          :aria-label="showSettings ? '关闭设置' : '打开设置'"
-        >
-          <Settings :size="Math.round(20 * petScale)" />
-        </button>
-      </div>
-
-      <transition name="picker-fade">
-        <div v-if="showSettings" class="settings-panel glass-card" @click.stop>
-          <div class="picker-header">
-            <span>设置</span>
-            <button class="picker-close" @click="showSettings = false" aria-label="关闭设置">
-              <X :size="14" />
-            </button>
-          </div>
-          <div class="settings-form">
-            <div class="settings-field">
-              <label class="settings-label">API Base URL（LLM接口地址）</label>
-              <input
-                v-model="baseUrl"
-                type="text"
-                class="settings-input"
-                placeholder="留空使用默认值"
-              />
-            </div>
-            <div class="settings-field">
-              <label class="settings-label">API Key</label>
-              <input
-                v-model="apiKey"
-                type="password"
-                class="settings-input"
-                placeholder="sk-..."
-              />
-            </div>
-            <div class="settings-field">
-              <label class="settings-label">模型 ID</label>
-              <input
-                v-model="modelId"
-                type="text"
-                class="settings-input"
-                placeholder="gpt-4o-mini"
-              />
-            </div>
-            <div class="settings-field">
-              <label class="settings-label">角色性格</label>
-              <div class="personality-options">
-                <button
-                  v-for="option in personalityOptions"
-                  :key="option.value"
-                  :class="['personality-btn', { active: personality === option.value }]"
-                  @click="personality = option.value"
-                  :title="option.description"
-                >
-                  {{ option.label }}
-                </button>
-              </div>
-            </div>
-            <div class="settings-field">
-              <label class="settings-label">生日</label>
-              <input
-                v-model="birthday"
-                type="date"
-                class="settings-input"
-              />
-            </div>
-            <div class="settings-field">
-              <label class="settings-label">自定义提示词</label>
-              <textarea
-                v-model="customPrompt"
-                class="settings-textarea"
-                placeholder="留空则使用默认提示词"
-                rows="4"
-              />
-            </div>
-            <button class="settings-save-btn" @click="saveSettings">
-              保存设置
-            </button>
-          </div>
-        </div>
-      </transition>
-
-      <transition name="picker-fade">
-        <div v-if="showModelPicker" class="model-picker glass-card" @click.stop>
-          <div class="picker-header">
-            <span>选择皮肤</span>
-            <button class="picker-close" @click="showModelPicker = false" aria-label="关闭皮肤选择">
-              <X :size="14" />
-            </button>
-          </div>
-          <div class="picker-list">
-            <div
-              v-for="m in availableModels"
-              :key="m.path"
-              :class="['picker-item', { active: currentModelUrl === m.path }]"
-              @click="switchModel(m.path)"
-            >
-              <Palette :size="16" class="picker-item-icon" />
-              <span class="picker-item-name">{{ m.name }}</span>
-              <Check v-if="currentModelUrl === m.path" :size="16" class="picker-check" />
-            </div>
-            <div v-if="availableModels.length === 0" class="picker-empty">
-              暂无可用皮肤
-            </div>
-          </div>
-        </div>
-      </transition>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
-import * as PIXI from 'pixi.js';
-import { Live2DModel } from 'pixi-live2d-display/cubism4';
-import axios from 'axios';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
-import {
-  MessageCircle,
-  X,
-  Mic,
-  Send,
-  Palette,
-  Check,
-  Wrench,
-  Volume2,
-  Settings,
-  Maximize2,
-  Minimize2
-} from 'lucide-vue-next';
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import ChatPanel from './components/ChatPanel.vue'
+import Live2DStage from './components/Live2DStage.vue'
+import SettingsPanel from './components/SettingsPanel.vue'
+import ModelPicker from './components/ModelPicker.vue'
+import ControlButtons from './components/ControlButtons.vue'
+import { useLive2D } from './stores/useLive2D.js'
+import { useSettings } from './stores/useSettings.js'
+import { useReminder } from './stores/useReminder.js'
+import { useFeishuSSE } from './composables/useFeishuSSE.js'
+import { useClickThrough } from './composables/useClickThrough.js'
+import { hasElectronApi, callElectronApi, getElectronApi } from './utils/electronBridge.js'
 
-marked.setOptions({
-  breaks: true,
-  gfm: true,
-});
+// ---- Top-level UI panel toggles -----------------------------------------
+const showDialog = ref(false)
+const isDialogExpanded = ref(false)
+const showModelPicker = ref(false)
+const showSettings = ref(false)
 
-function renderMarkdown(content) {
-  if (!content) return '';
-  const rawHtml = marked.parse(content);
-  return DOMPurify.sanitize(rawHtml);
-}
+const petContainer = ref(null)
+const petRow = ref(null)
+const wrapperEl = ref(null)
+const chatPanelRef = ref(null)
+const live2dStageRef = ref(null)
+const settingsPanelRef = ref(null)
+const modelPickerRef = ref(null)
 
-const messages = ref([]);
-const inputValue = ref("");
-const loading = ref(false);
-const messagesRef = ref(null);
-const eventSource = ref(null);
-const feishuConnected = ref(false);
-const processedMsgIds = new Set();
-const isRecording = ref(false);
-const mediaRecorder = ref(null);
-const audioChunks = ref([]);
+/** Screen X of the Live2D doll — kept constant when side panels open/close. */
+let petAnchorScreenX = null
 
-const showDialog = ref(false);
-const dialogBubble = ref(null);
-const petContainer = ref(null);
+// ---- Stores --------------------------------------------------------------
+const live2d = useLive2D()
+const settings = useSettings()
+const reminder = useReminder()
+const feishu = useFeishuSSE()
+const click = useClickThrough()
 
-const isDialogExpanded = ref(false);
-const isDialogDragging = ref(false);
-const dialogDragStartX = ref(0);
-const dialogDragStartY = ref(0);
-const dialogDragStartMouseX = ref(0);
-const dialogDragStartMouseY = ref(0);
-
-const showInteractionBubble = ref(false);
-const interactionMessage = ref('');
-let interactionTimer = null;
-
-const live2dCanvas = ref(null);
-const isModelLoaded = ref(false);
-const modelError = ref('');
-let app = null;
-let model = null;
-
-const currentModelUrl = ref('/Haru/Haru.model3.json');
-const availableModels = ref([]);
-const showModelPicker = ref(false);
-const showSettings = ref(false);
-
-const isDragging = ref(false);
-const dragMoved = ref(false);
-// 拖拽时记录屏幕坐标和窗口位置
-const dragStartScreenX = ref(0);
-const dragStartScreenY = ref(0);
-const dragStartWindowX = ref(0);
-const dragStartWindowY = ref(0);
-
-// 桌宠在窗口内始终位于 (0, 0)，不再需要 petX/petY 定位
-const petX = ref(0);
-const petY = ref(0);
-
-// 多屏幕信息
-const screenInfo = ref(null);
-
-// 窗口大小管理：根据对话框状态动态调整窗口大小
-const updateWindowSize = async () => {
-  if (!window.electronAPI || !window.electronAPI.resizePetWindow) return;
-  
-  const petW = currentPetWidth.value;
-  const petH = currentPetHeight.value;
-  let windowW = petW;
-  let windowH = petH;
-  
-  // 如果对话框展开，窗口需要包含对话框
-  if (showDialog.value && dialogBubble.value) {
-    const dialogRect = dialogBubble.value.getBoundingClientRect();
-    windowH = Math.max(windowH, dialogRect.bottom);
-    windowW = Math.max(windowW, dialogRect.right);
-  }
-  
-  // 获取当前窗口位置
-  const pos = await window.electronAPI.getWindowPosition();
-  await window.electronAPI.resizePetWindow(pos.x, pos.y, Math.round(windowW), Math.round(windowH));
-};
-
-const initScreenInfo = async () => {
-  if (window.electronAPI && window.electronAPI.getScreenInfo) {
-    try {
-      const info = await window.electronAPI.getScreenInfo();
-      screenInfo.value = info;
-      // 窗口位置已由主进程设置，无需再调整
-    } catch (e) {
-      console.error('[Frontend] Failed to get screen info:', e);
-    }
-  }
-};
-
-// 监听对话框状态变化，动态调整窗口大小
-watch(showDialog, async (val) => {
-  await nextTick();
-  setTimeout(updateWindowSize, 50);
-});
-
-watch(isDialogExpanded, async (val) => {
-  await nextTick();
-  setTimeout(updateWindowSize, 50);
-});
-
-// 缩放桌宠时也更新窗口大小
-watch(petScale, async () => {
-  await nextTick();
-  setTimeout(updateWindowSize, 50);
-});
-
-const updateScreenInfo = (info) => {
-  screenInfo.value = info;
-  console.log('[Frontend] Screen info updated:', JSON.stringify(info));
-};
-
-const isHoveringPet = ref(false);
-
-const petScale = ref(1);
-const isResizing = ref(false);
-const resizeStartX = ref(0);
-const resizeStartY = ref(0);
-const resizeStartScale = ref(1);
-
-const DEFAULT_API_URL = "http://127.0.0.1:3000";
-const storedBaseUrl = localStorage.getItem('pet_base_url') || '';
-const storedApiKey = localStorage.getItem('pet_api_key') || '';
-const storedModelId = localStorage.getItem('pet_model_id') || '';
-const storedPersonality = localStorage.getItem('pet_personality') || 'gentle';
-const baseUrl = ref(storedBaseUrl);
-const apiKey = ref(storedApiKey);
-const modelId = ref(storedModelId);
-const personality = ref(storedPersonality);
-const storedBirthday = localStorage.getItem('pet_birthday') || '';
-const birthday = ref(storedBirthday);
-const storedCustomPrompt = localStorage.getItem('pet_custom_prompt') || '';
-const customPrompt = ref(storedCustomPrompt);
-
-const personalityOptions = [
-  { value: 'gentle', label: '温柔', description: '说话温柔体贴' },
-  { value: 'active', label: '活泼', description: '活泼开朗' },
-  { value: 'tsundere', label: '傲娇', description: '口是心非' },
-];
-
-const reminderMessages = {
-  morning: {
-    wakeup: {
-      gentle: '早安呀～新的一天开始啦，伸个懒腰起床吧，记得喝一杯温水唤醒身体哦',
-      active: '叮！你的专属叫醒服务已上线！快起床快起床，太阳都晒屁股啦～',
-      tsundere: '喂，还睡呢？再不起床上班/上学就要迟到了，我可不会等你哦',
-    },
-    breakfast: {
-      gentle: '早餐是一天中最重要的一餐，再忙也要记得吃点东西呀',
-      active: '干饭时间到！早餐吃什么？包子油条还是牛奶面包？快告诉我！',
-      tsundere: '哼，我才不是关心你呢，只是不吃早餐会胃疼，到时候别赖我没提醒你',
-    },
-   出门: {
-      gentle: '出门前记得检查一下钥匙、手机和钱包，还有今天的天气哦',
-      active: '出发出发！今天也要元气满满地度过呀！',
-      tsundere: '喂，东西都带齐了吗？丢三落四的，我可不会帮你捡东西',
-    },
-  },
-  forenoon: {
-    work: {
-      gentle: '开始工作/学习啦，先整理一下今天的任务清单吧',
-      active: '冲鸭！今天也要努力搬砖/好好学习呀！',
-      tsundere: '别发呆了，赶紧干活，不然晚上又要加班了',
-    },
-    snack: {
-      gentle: '工作/学习了一个多小时了，休息一下吧，吃点小零食补充能量',
-      active: '摸鱼时间到！快起来活动活动，顺便吃点好吃的～',
-      tsundere: '喂，都坐了一上午了，再不动弹就要长肉肉了',
-    },
-  },
-  noon: {
-    lunch: {
-      gentle: '中午好呀，该吃午饭了，记得荤素搭配，营养均衡哦',
-      active: '干饭人干饭魂！干饭时间到！冲啊！',
-      tsundere: '终于到吃饭时间了，再不吃我都要饿扁了',
-    },
-    nap: {
-      gentle: '吃完午饭休息一会儿吧，小憩20分钟下午会更有精神哦',
-      active: '午睡时间到！闭上眼睛休息一下吧，我会帮你看着时间的',
-      tsundere: '赶紧睡会儿，不然下午打瞌睡被老板/老师抓到我可不管',
-    },
-  },
-  afternoon: {
-    work: {
-      gentle: '午休结束啦，洗把脸清醒一下，继续下午的工作/学习吧',
-      active: '睡醒啦睡醒啦！下午也要加油哦！',
-      tsundere: '别睡了别睡了，再睡一天就过去了',
-    },
-    tea: {
-      gentle: '下午有点困了吧？喝杯咖啡或者茶，再吃点小点心吧',
-      active: '下午茶时间到！让我们一起补充能量，再战一下午！',
-      tsundere: '喂，都快睡着了吧？起来喝点东西提提神',
-    },
-    offWork: {
-      gentle: '今天辛苦啦，收拾一下东西准备回家吧',
-      active: '解放啦解放啦！终于可以回家啦！',
-      tsundere: '终于下班了，再不走我就自己先溜了',
-    },
-  },
-  evening: {
-    dinner: {
-      gentle: '晚上好呀，该吃晚饭了，不要吃太油腻的东西哦',
-      active: '晚餐时间到！今天晚上吃什么好吃的呀？',
-      tsundere: '赶紧吃饭，不然一会儿又要吃夜宵了',
-    },
-    exercise: {
-      gentle: '吃完饭休息一会儿，起来运动一下吧，散步或者做瑜伽都可以哦',
-      active: '生命在于运动！快起来动一动，甩掉一天的疲惫～',
-      tsundere: '喂，吃完就躺着，你是猪吗？赶紧起来运动',
-    },
-    bedtime: {
-      gentle: '时间不早了，准备洗漱睡觉吧，放下手机，让眼睛休息一下',
-      active: '洗漱时间到！刷刷牙洗洗脸，舒舒服服睡个好觉～',
-      tsundere: '别玩手机了，赶紧去洗漱，不然明天又起不来了',
-    },
-  },
-  midnight: {
-    stayUp: {
-      gentle: '已经十一点了，该睡觉了，熬夜对身体不好哦',
-      active: '很晚啦很晚啦！快睡觉快睡觉，不然会有黑眼圈的！',
-      tsundere: '喂，还不睡？想秃头吗？赶紧给我睡觉去',
-    },
-    forcedSleep: {
-      gentle: '已经十二点了，真的该睡觉了，明天还要早起呢',
-      active: '晚安晚安！再不睡觉我就要生气了哦！',
-      tsundere: '我警告你，现在立刻马上睡觉，不然我就不理你了',
-    },
-    lateWork: {
-      gentle: '都一点了，别再工作/学习了，身体最重要，先睡觉吧',
-      active: '救命啊！你怎么还不睡觉？再这样下去身体会垮掉的！',
-      tsundere: '你是铁打的吗？都一点了还不睡觉，我都困死了',
-    },
-  },
-  periodic: {
-    drinkWater: {
-      gentle: '该喝水啦，多喝水对身体好哦',
-      active: '咕嘟咕嘟～喝水时间到！快喝一大杯水！',
-      tsundere: '喂，喝水了，别等渴了才喝',
-    },
-    move: {
-      gentle: '坐了一个小时了，起来活动一下吧，伸伸胳膊踢踢腿',
-      active: '起来动一动！扭扭脖子扭扭腰，预防颈椎病～',
-      tsundere: '再坐下去就要变成石头了，赶紧起来活动',
-    },
-    eyeCare: {
-      gentle: '看屏幕看了两个小时了，看看远处，让眼睛休息一下吧',
-      active: '护眼时间到！闭上眼睛休息5分钟，或者看看窗外的绿色植物～',
-      tsundere: '眼睛不要了吗？赶紧看看远处，别一直盯着屏幕',
-    },
-    longSit: {
-      gentle: '你已经连续坐了两个小时了，起来走一走，倒杯水或者上个厕所吧',
-      active: '久坐伤身！快起来溜达溜达，不然屁股会变大的！',
-      tsundere: '你是粘在椅子上了吗？赶紧起来走两步',
-    },
-  },
-  special: {
-    phoneTime: {
-      gentle: '你已经看了一个小时手机了，放下手机休息一下吧',
-      active: '手机有什么好看的？看看我呀！快放下手机！',
-      tsundere: '再看手机眼睛就要瞎了，赶紧放下',
-    },
-    forgetMeal: {
-      gentle: '你是不是忘记吃饭了？再忙也要按时吃饭呀',
-      active: '干饭时间都过了！你怎么还不吃饭？快饿死了吗？',
-      tsundere: '连饭都忘记吃，你还能记得什么？赶紧去吃饭',
-    },
-    yawn: {
-      gentle: '困了吗？如果太累了就休息一会儿吧',
-      active: '哈哈，你打哈欠了！是不是困啦？',
-      tsundere: '困了就去睡，别硬撑着',
-    },
-    completeTask: {
-      gentle: '太棒了！你完成了今天的任务，奖励自己休息一下吧',
-      active: '哇塞！你太厉害了！任务完成！',
-      tsundere: '哼，终于完成了，还不算太笨',
-    },
-    birthday: {
-      gentle: '今天是你的生日呀，祝你生日快乐！',
-      active: '生日快乐！今天要开心哦！',
-      tsundere: '喂，今天是你的生日，我可没忘哦',
-    },
-    holiday: {
-      gentle: '今天是{holiday}呀，祝你节日快乐！',
-      active: '{holiday}快乐！今天要开心哦！',
-      tsundere: '喂，今天是{holiday}，我可没忘哦',
-    },
-  },
-  random: [
-    '今天也要开心呀！',
-    '你在做什么呢？我一直在陪着你哦',
-    '累了就休息一下，不要太勉强自己',
-    '你今天真好看/真厉害！',
-    '有什么不开心的事情可以跟我说呀',
-    '我会一直陪着你的',
-  ],
-};
-
-let reminderTimers = [];
-let lastDrinkTime = Date.now();
-let lastMoveTime = Date.now();
-let lastEyeCareTime = Date.now();
-let lastRandomTime = Date.now();
-let continuousSitTime = Date.now();
-let phoneStartTime = 0;
-let isUsingPhone = false;
-
+// ---- Pet container geometry --------------------------------------------
+// Live2D stays at a fixed position inside pet-container; left panels sit
+// in the flex row to its left. Window x is adjusted so the doll's screen
+// coordinates never move when panels toggle.
 const petContainerStyle = computed(() => ({
-  left: '0px',
-  top: '0px',
-  width: currentPetWidth.value + 'px',
-  height: currentPetHeight.value + 'px',
-}));
+  width: live2d.petWidth() + 'px',
+  height: live2d.petHeight() + 'px',
+}))
 
-const BASE_WIDTH = 300;
-const BASE_HEIGHT = 400;
-const MIN_SCALE = 0.5;
-const MAX_SCALE = 2.0;
-
-const currentPetWidth = computed(() => Math.round(BASE_WIDTH * petScale.value));
-const currentPetHeight = computed(() => Math.round(BASE_HEIGHT * petScale.value));
-
-const petScalerStyle = computed(() => ({}));
-
-const live2dWrapperStyle = computed(() => ({
-  width: currentPetWidth.value + 'px',
-  height: currentPetHeight.value + 'px',
-}));
-
-function startResize(e) {
-  isResizing.value = true;
-  resizeStartX.value = e.clientX;
-  resizeStartY.value = e.clientY;
-  resizeStartScale.value = petScale.value;
-  e.preventDefault();
-}
-
-function onResizeMove(e) {
-  if (!isResizing.value) return;
-  const dx = e.clientX - resizeStartX.value;
-  const dy = e.clientY - resizeStartY.value;
-  const delta = (dx + dy) / 2;
-  const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, resizeStartScale.value + delta / 200));
-  petScale.value = newScale;
-  applyPixiResize();
-}
-
-function onResizeUp() {
-  if (isResizing.value) {
-    isResizing.value = false;
+/** Collect bounding boxes of chrome that can extend past the pet row. */
+function collectOverflowRects() {
+  const rects = []
+  const add = (el) => {
+    if (!el || el.nodeType !== 1) return
+    const style = window.getComputedStyle(el)
+    if (style.display === 'none' || style.visibility === 'hidden') return
+    rects.push(el.getBoundingClientRect())
   }
+  if (showDialog.value) add(chatPanelRef.value?.bubbleEl)
+  add(petContainer.value?.querySelector('.interaction-bubble'))
+  return rects
 }
 
-function applyPixiResize() {
-  if (!app) return;
-  const w = currentPetWidth.value;
-  const h = currentPetHeight.value;
-  app.renderer.resize(w, h);
-  updateModelScale();
-}
+async function updateWindowSize() {
+  if (!hasElectronApi('resizePetWindow')) return
+  await nextTick()
 
-function onPetAreaEnter() {
-  isHoveringPet.value = true;
-  setClickThrough(false);
-}
+  const pos = await callElectronApi('getWindowPosition')
+  const pet = petContainer.value
+  if (!pet) return
 
-function onPetAreaLeave() {
-  isHoveringPet.value = false;
-  console.log('[Frontend] onPetAreaLeave, isDragging:', isDragging.value);
-  if (!isDragging.value) {
-    setClickThrough(true);
-  }
-}
+  const winX = pos?.x ?? 0
+  const winY = pos?.y ?? 0
 
-function setClickThrough(ignore) {
-  if (window.electronAPI && window.electronAPI.setIgnoreMouseEvents) {
-    window.electronAPI.setIgnoreMouseEvents(ignore, { forward: true });
-  }
-}
+  const petRect = pet.getBoundingClientRect()
+  // Anchor in screen space so the doll does not jump when side panels open.
+  const petScreenLeft = winX + petRect.left
 
-function waitForCubismCore() {
-  return new Promise((resolve, reject) => {
-    const maxAttempts = 50;
-    let attempts = 0;
-
-    const checkInterval = setInterval(() => {
-      attempts++;
-      if (typeof Live2DCubismCore !== 'undefined') {
-        clearInterval(checkInterval);
-        resolve();
-      } else if (attempts >= maxAttempts) {
-        clearInterval(checkInterval);
-        reject(new Error('Live2D Cubism Core 加载超时'));
-      }
-    }, 100);
-  });
-}
-
-async function ensurePixiApp() {
-  if (app) return;
-
-  if (!live2dCanvas.value) {
-    throw new Error('Canvas 元素不存在');
+  if (!showSettings.value && !showModelPicker.value) {
+    petAnchorScreenX = petScreenLeft
+  } else if (petAnchorScreenX === null) {
+    petAnchorScreenX = petScreenLeft
   }
 
-  app = new PIXI.Application({
-    view: live2dCanvas.value,
-    width: Math.round(BASE_WIDTH * petScale.value),
-    height: Math.round(BASE_HEIGHT * petScale.value),
-    transparent: true,
-    backgroundColor: 0x000000,
-    backgroundAlpha: 0,
-    clearBeforeRender: true,
-    preserveDrawingBuffer: false,
-    antialias: true,
-    resolution: window.devicePixelRatio || 1,
-    autoDensity: true
-  });
-}
+  // Reposition window so the pet's screen X stays fixed while panels toggle.
+  const newWinX = Math.round(petAnchorScreenX - petRect.left)
+  const newWinY = winY
 
-async function loadModel() {
-  try {
-    modelError.value = '';
-    await waitForCubismCore();
-    await ensurePixiApp();
+  // Size from viewport (client) coordinates only — never mix with screen coords.
+  let contentLeft = 0
+  let contentRight = petRect.right
+  let contentBottom = petRect.bottom
 
-    window.PIXI = PIXI;
-
-    model = await Live2DModel.from(currentModelUrl.value);
-
-    updateModelScale();
-    app.stage.addChild(model);
-
-    isModelLoaded.value = true;
-
-    setupWatermarkRemoval();
-
-    playStartupAnimation();
-    playIdleAnimation();
-    setupModelInteraction();
-
-  } catch (error) {
-    console.error('Live2D 初始化失败:', error);
-    modelError.value = error.message || '模型加载失败';
-    isModelLoaded.value = false;
+  const row = petRow.value
+  if (row) {
+    const r = row.getBoundingClientRect()
+    contentLeft = Math.min(contentLeft, r.left)
+    contentRight = Math.max(contentRight, r.right)
+    contentBottom = Math.max(contentBottom, r.bottom)
   }
-}
-
-function updateModelScale() {
-  if (!model) return;
-
-  const containerWidth = currentPetWidth.value;
-  const containerHeight = currentPetHeight.value;
-  const targetHeight = containerHeight * 0.9;
-  const modelOriginalHeight = model.height / model.scale.y;
-  const scale = targetHeight / modelOriginalHeight;
-
-  model.scale.set(scale);
-  model.x = (containerWidth - model.width) / 2;
-  model.y = (containerHeight - model.height) / 2;
-}
-
-// 关闭林翩翩模型的水印
-function setupWatermarkRemoval() {
-  if (!model || !currentModelUrl.value.includes('林翩翩')) return;
-  
-  // 尝试播放"水印"表情来隐藏水印（现在水印.exp3.json 中 Param56 = 0）
-  try {
-    if (model.expression) {
-      model.expression('水印');
-    }
-  } catch (e) {
-    console.warn('播放水印表情失败:', e);
+  const btnRow = pet.querySelector('.button-row')
+  if (btnRow) {
+    const br = btnRow.getBoundingClientRect()
+    contentLeft = Math.min(contentLeft, br.left)
+    contentRight = Math.max(contentRight, br.right)
+    contentBottom = Math.max(contentBottom, br.bottom)
   }
-}
-
-function playStartupAnimation() {
-  try {
-    if (!model) return;
-
-    const motionGroups = model.internalModel.motionManager.motionGroups;
-    const expressionNames = model.internalModel.motionManager.expressionManager ? Object.keys(model.internalModel.motionManager.expressionManager.expressions || {}) : [];
-
-    const firstGroup = Object.keys(motionGroups)[0];
-    if (firstGroup && model.motion) {
-      model.motion(firstGroup, 0, 3);
-    }
-
-    if (expressionNames.length > 0 && model.expression) {
-      const randomExp = expressionNames[Math.floor(Math.random() * expressionNames.length)];
-      setTimeout(() => { if (model && model.expression) model.expression(randomExp); }, 500);
-      setTimeout(() => { if (model && model.expression) model.expression(expressionNames[0]); }, 2000);
-    }
-  } catch (error) {
-    console.warn('播放启动动画失败:', error);
-  }
-}
-
-let idleAnimationInterval = null;
-function playIdleAnimation() {
-  try {
-    if (!model) return;
-
-    const motionGroups = model.internalModel.motionManager.motionGroups;
-    const expressionNames = model.internalModel.motionManager.expressionManager ? Object.keys(model.internalModel.motionManager.expressionManager.expressions || {}) : [];
-    const groupNames = Object.keys(motionGroups);
-
-    const playCurrentIdleAction = () => {
-      if (!model) return;
-
-      try {
-        if (groupNames.length > 0 && model.motion) {
-          const groupName = groupNames[Math.floor(Math.random() * groupNames.length)];
-          const group = motionGroups[groupName];
-          const index = Math.floor(Math.random() * (group?.length || 1));
-          model.motion(groupName, index, 1);
-        }
-
-        if (expressionNames.length > 0 && model.expression) {
-          const expName = expressionNames[Math.floor(Math.random() * expressionNames.length)];
-          setTimeout(() => { if (model && model.expression) model.expression(expName); }, 500);
-        }
-      } catch (error) {
-        console.warn('播放待机动作失败:', error);
-      }
-    };
-
-    playCurrentIdleAction();
-
-    idleAnimationInterval = setInterval(() => {
-      if (model) {
-        playCurrentIdleAction();
-      } else {
-        clearInterval(idleAnimationInterval);
-      }
-    }, 10000);
-
-  } catch (error) {
-    console.warn('播放待机动画失败:', error);
-  }
-}
-
-function setupModelInteraction() {
-  if (!model) return;
-
-  model.eventMode = 'static';
-  model.cursor = 'pointer';
-
-  model.on('pointerdown', () => {
-    playRandomMotion();
-  });
-}
-
-function playRandomMotion() {
-  try {
-    if (!model) return;
-
-    const motionGroups = model.internalModel.motionManager.motionGroups;
-    const expressionNames = model.internalModel.motionManager.expressionManager ? Object.keys(model.internalModel.motionManager.expressionManager.expressions || {}) : [];
-    const groupNames = Object.keys(motionGroups);
-
-    if (groupNames.length > 0 && model.motion) {
-      const groupName = groupNames[Math.floor(Math.random() * groupNames.length)];
-      const group = motionGroups[groupName];
-      const index = Math.floor(Math.random() * (group?.length || 1));
-      model.motion(groupName, index, 3);
-
-      if (expressionNames.length > 0 && model.expression) {
-        const randomExp = expressionNames[Math.floor(Math.random() * expressionNames.length)];
-        setTimeout(() => { if (model && model.expression) model.expression(randomExp); }, 300);
-        setTimeout(() => { if (model && model.expression) model.expression(expressionNames[0]); }, 2500);
-      }
-    }
-  } catch (error) {
-    console.warn('播放交互动画失败:', error);
-  }
-}
-
-function cleanupModel() {
-  if (idleAnimationInterval) {
-    clearInterval(idleAnimationInterval);
-    idleAnimationInterval = null;
+  for (const r of collectOverflowRects()) {
+    contentLeft = Math.min(contentLeft, r.left)
+    contentRight = Math.max(contentRight, r.right)
+    contentBottom = Math.max(contentBottom, r.bottom)
   }
 
-  if (model) {
-    if (app && app.stage) {
-      app.stage.removeChild(model);
-    }
-    model.destroy();
-    model = null;
-  }
+  const width = Math.max(Math.ceil(contentRight - contentLeft), live2d.petWidth() + 60)
+  const height = Math.max(Math.ceil(contentBottom), live2d.petHeight())
 
-  isModelLoaded.value = false;
-  modelError.value = '';
+  callElectronApi('resizePetWindow', newWinX, newWinY, width, height)
+  live2d.applyResize()
 }
 
-function cleanupLive2D() {
-  cleanupModel();
+function onPanelOpened() {
+  setTimeout(updateWindowSize, 0)
+}
 
-  if (app) {
-    app.destroy(true, { children: true, texture: true, baseTexture: true });
-    app = null;
-  }
+watch(
+  [showDialog, isDialogExpanded, showModelPicker, showSettings, () => live2d.petScale.value],
+  async () => {
+    await nextTick()
+    setTimeout(updateWindowSize, 50)
+  },
+)
+
+watch(
+  () => live2d.isModelLoaded.value,
+  (loaded) => {
+    if (loaded) setTimeout(updateWindowSize, 50)
+  },
+)
+
+function onDialogSized() {
+  setTimeout(updateWindowSize, 50)
+}
+
+// ---- Click-through (transparent area passes mouse events to OS) --------
+function onPetAreaEnter() { click.set(false) }
+function onPetAreaLeave() { click.set(true) }
+
+// ---- Panel exclusivity --------------------------------------------------
+function onTogglePanel(which) {
+  showDialog.value      = which === 'dialog'      ? !showDialog.value      : false
+  showModelPicker.value = which === 'modelPicker' ? !showModelPicker.value : false
+  showSettings.value    = which === 'settings'    ? !showSettings.value    : false
+}
+
+async function onPickModel(path) {
+  // Bug #16: previously this dug the canvas out via
+  // document.getElementById('live2d-canvas'). The store now reuses the
+  // existing PIXI view internally, so we don't need to break the
+  // component boundary.
+  await live2d.switchModel(path)
 }
 
 function closePet() {
-  // 清理资源
-  cleanupLive2D();
-  
-  // 如果是 Electron 环境，关闭窗口
-  if (window.electronAPI && window.electronAPI.closeWindow) {
-    window.electronAPI.closeWindow();
+  live2d.cleanup()
+  if (hasElectronApi('closeWindow')) {
+    callElectronApi('closeWindow')
   } else {
-    // 浏览器环境，隐藏桌宠或刷新页面
-    const petContainer = document.querySelector('.desktop-pet-wrapper');
-    if (petContainer) {
-      petContainer.style.display = 'none';
-    }
+    const wrapper = document.querySelector('.desktop-pet-wrapper')
+    if (wrapper) wrapper.style.display = 'none'
   }
 }
 
-async function scanModels() {
-  if (window.electronAPI && window.electronAPI.scanLive2DModels) {
-    try {
-      const result = await window.electronAPI.scanLive2DModels();
-      if (result.success && result.models.length > 0) {
-        availableModels.value = result.models;
-      }
-    } catch (error) {
-      console.error('扫描模型失败:', error);
-    }
-  } else {
-    // 手动配置可用的模型列表
-    availableModels.value = [
-      { name: 'Haru', path: '/Haru/Haru.model3.json' },
-      { name: 'Mahiro', path: '/Mahiro_GG/Mahiro_V1.model3.json' },
-      { name: 'UG', path: '/UG/ugofficial.model3.json' },
-      { name: '弈', path: '/弈/13.model3.json' },
-      { name: '林翩翩', path: '/林翩翩/林翩翩.model3.json' }
-    ];
+// ---- Lifecycle ----------------------------------------------------------
+onMounted(async () => {
+  click.set(true)
+
+  settings.loadFromBackend()
+  await live2d.scanModels()
+
+  // Wait for Live2D canvas init before fitting the Electron window.
+  await nextTick()
+  setTimeout(updateWindowSize, 600)
+
+  feishu.start()
+  setTimeout(() => reminder.start(), 1000)
+
+  // Multi-screen info — Electron pushes updates when monitors come/go.
+  if (hasElectronApi('onScreenInfoUpdated')) {
+    getElectronApi().onScreenInfoUpdated((info) => {
+      console.log('[App] Screen info updated:', JSON.stringify(info))
+    })
   }
-}
-
-function saveSettings() {
-  localStorage.setItem('pet_base_url', baseUrl.value);
-  localStorage.setItem('pet_api_key', apiKey.value);
-  localStorage.setItem('pet_model_id', modelId.value);
-  localStorage.setItem('pet_personality', personality.value);
-  localStorage.setItem('pet_birthday', birthday.value);
-  localStorage.setItem('pet_custom_prompt', customPrompt.value);
-  showSettings.value = false;
-}
-
-function getPersonalityMessage(messages) {
-  return messages[personality.value] || messages.gentle;
-}
-
-function addReminderMessage(message) {
-  if (interactionTimer) {
-    clearTimeout(interactionTimer);
-  }
-  
-  interactionMessage.value = message;
-  showInteractionBubble.value = true;
-  
-  interactionTimer = setTimeout(() => {
-    showInteractionBubble.value = false;
-    interactionMessage.value = '';
-  }, 5000);
-}
-
-function scheduleDailyReminders() {
-  const now = new Date();
-  const hour = now.getHours();
-  const minute = now.getMinutes();
-
-  const scheduleReminder = (targetHour, targetMinute, messageKey, period) => {
-    const targetTime = new Date();
-    targetTime.setHours(targetHour, targetMinute, 0, 0);
-    
-    let delay = targetTime.getTime() - now.getTime();
-    if (delay < 0) {
-      targetTime.setDate(targetTime.getDate() + 1);
-      delay = targetTime.getTime() - now.getTime();
-    }
-
-    const timer = setTimeout(() => {
-      const messages = reminderMessages[period][messageKey];
-      if (messages) {
-        addReminderMessage(getPersonalityMessage(messages));
-      }
-      scheduleDailyReminders();
-    }, delay);
-
-    reminderTimers.push(timer);
-  };
-
-  if (hour < 6) {
-    scheduleReminder(6, 30, 'wakeup', 'morning');
-  } else if (hour < 7) {
-    scheduleReminder(7, 0, 'breakfast', 'morning');
-  } else if (hour < 7.5) {
-    scheduleReminder(7, 30, '出门', 'morning');
-  } else if (hour < 9) {
-    scheduleReminder(9, 0, 'work', 'forenoon');
-  } else if (hour < 10.5) {
-    scheduleReminder(10, 30, 'snack', 'forenoon');
-  } else if (hour < 12) {
-    scheduleReminder(12, 0, 'lunch', 'noon');
-  } else if (hour < 13) {
-    scheduleReminder(13, 0, 'nap', 'noon');
-  } else if (hour < 14) {
-    scheduleReminder(14, 0, 'work', 'afternoon');
-  } else if (hour < 15.5) {
-    scheduleReminder(15, 30, 'tea', 'afternoon');
-  } else if (hour < 17.5) {
-    scheduleReminder(17, 30, 'offWork', 'afternoon');
-  } else if (hour < 18) {
-    scheduleReminder(18, 0, 'dinner', 'evening');
-  } else if (hour < 19.5) {
-    scheduleReminder(19, 30, 'exercise', 'evening');
-  } else if (hour < 21.5) {
-    scheduleReminder(21, 30, 'bedtime', 'evening');
-  } else if (hour < 23) {
-    scheduleReminder(23, 0, 'stayUp', 'midnight');
-  } else if (hour < 24) {
-    scheduleReminder(0, 0, 'forcedSleep', 'midnight');
-  } else {
-    scheduleReminder(1, 0, 'lateWork', 'midnight');
-  }
-}
-
-function startPeriodicReminders() {
-  const drinkInterval = setInterval(() => {
-    const messages = reminderMessages.periodic.drinkWater;
-    addReminderMessage(getPersonalityMessage(messages));
-    lastDrinkTime = Date.now();
-  }, 60 * 60 * 1000);
-
-  const moveInterval = setInterval(() => {
-    const messages = reminderMessages.periodic.move;
-    addReminderMessage(getPersonalityMessage(messages));
-    lastMoveTime = Date.now();
-  }, 60 * 60 * 1000);
-
-  const eyeCareInterval = setInterval(() => {
-    const messages = reminderMessages.periodic.eyeCare;
-    addReminderMessage(getPersonalityMessage(messages));
-    lastEyeCareTime = Date.now();
-  }, 2 * 60 * 60 * 1000);
-
-  const randomInterval = setInterval(() => {
-    const randomMessages = reminderMessages.random;
-    const randomMessage = randomMessages[Math.floor(Math.random() * randomMessages.length)];
-    addReminderMessage(randomMessage);
-    lastRandomTime = Date.now();
-  }, 60 * 1000);
-
-  reminderTimers.push(drinkInterval, moveInterval, eyeCareInterval, randomInterval);
-}
-
-function checkBirthday() {
-  if (!birthday.value) return;
-  
-  const now = new Date();
-  const todayMonth = now.getMonth() + 1;
-  const todayDay = now.getDate();
-  
-  const birthdayParts = birthday.value.split('-');
-  if (birthdayParts.length >= 2) {
-    const birthMonth = parseInt(birthdayParts[1]);
-    const birthDay = parseInt(birthdayParts[2]);
-    
-    if (birthMonth === todayMonth && birthDay === todayDay) {
-      const messages = reminderMessages.special.birthday;
-      addReminderMessage(getPersonalityMessage(messages));
-    }
-  }
-}
-
-function clearAllReminders() {
-  reminderTimers.forEach(timer => clearTimeout(timer));
-  reminderTimers = [];
-}
-
-function startReminderSystem() {
-  clearAllReminders();
-  scheduleDailyReminders();
-  startPeriodicReminders();
-  checkBirthday();
-}
-
-function toggleDialogSize() {
-  isDialogExpanded.value = !isDialogExpanded.value;
-}
-
-function startDialogDrag(e) {
-  if (e.target.closest('.bubble-header-btns')) return;
-  
-  isDialogDragging.value = true;
-  // 记录鼠标屏幕坐标和窗口位置
-  dialogDragStartMouseX.value = e.screenX;
-  dialogDragStartMouseY.value = e.screenY;
-  // 获取当前窗口位置（异步）
-  if (window.electronAPI && window.electronAPI.getWindowPosition) {
-    window.electronAPI.getWindowPosition().then(pos => {
-      dialogDragStartX.value = pos.x;
-      dialogDragStartY.value = pos.y;
-    });
-  }
-  
-  document.addEventListener('mousemove', onDialogDrag);
-  document.addEventListener('mouseup', stopDialogDrag);
-}
-
-function onDialogDrag(e) {
-  if (!isDialogDragging.value) return;
-  
-  const dx = e.screenX - dialogDragStartMouseX.value;
-  const dy = e.screenY - dialogDragStartMouseY.value;
-  const newX = dialogDragStartX.value + dx;
-  const newY = dialogDragStartY.value + dy;
-  
-  // 移动窗口
-  if (window.electronAPI && window.electronAPI.movePetWindow) {
-    window.electronAPI.movePetWindow(newX, newY);
-  }
-}
-
-function stopDialogDrag() {
-  isDialogDragging.value = false;
-  document.removeEventListener('mousemove', onDialogDrag);
-  document.removeEventListener('mouseup', stopDialogDrag);
-}
-
-async function switchModel(modelPath) {
-  currentModelUrl.value = modelPath;
-  showModelPicker.value = false;
-  cleanupModel();
-  await loadModel();
-}
-
-const startDrag = async (e) => {
-  isDragging.value = true;
-  dragMoved.value = false;
-  // 记录鼠标的屏幕坐标
-  dragStartScreenX.value = e.screenX;
-  dragStartScreenY.value = e.screenY;
-  // 获取当前窗口位置
-  if (window.electronAPI && window.electronAPI.getWindowPosition) {
-    const pos = await window.electronAPI.getWindowPosition();
-    dragStartWindowX.value = pos.x;
-    dragStartWindowY.value = pos.y;
-  }
-  setClickThrough(false);
-  e.preventDefault();
-};
-
-const onMouseMove = (e) => {
-  if (isResizing.value) {
-    onResizeMove(e);
-    return;
-  }
-  if (!isDragging.value) return;
-  if (e.buttons !== 1) {
-    isDragging.value = false;
-    setClickThrough(true);
-    return;
-  }
-  dragMoved.value = true;
-
-  // 计算鼠标在屏幕上的位移
-  const dx = e.screenX - dragStartScreenX.value;
-  const dy = e.screenY - dragStartScreenY.value;
-  const newX = dragStartWindowX.value + dx;
-  const newY = dragStartWindowY.value + dy;
-
-  // 移动窗口（OS 自然处理屏幕边界）
-  if (window.electronAPI && window.electronAPI.movePetWindow) {
-    window.electronAPI.movePetWindow(newX, newY);
-  }
-};
-
-const onMouseUp = (e) => {
-  if (isDragging.value) {
-    isDragging.value = false;
-    setClickThrough(true);
-  }
-  onResizeUp();
-};
-
-const connectFeishuSSE = async () => {
-  if (window.electronAPI && window.electronAPI.removeFeishuListener) {
-    window.electronAPI.removeFeishuListener();
-  }
-
-  if (eventSource.value) {
-    eventSource.value.close();
-    eventSource.value = null;
-  }
-
-  if (window.electronAPI && window.electronAPI.connectFeishuSSE) {
-    try {
-      await window.electronAPI.connectFeishuSSE();
-      feishuConnected.value = true;
-
-      window.electronAPI.onFeishuEvent((data) => {
-        handleFeishuEvent(data);
-      });
-    } catch (e) {
-      console.error("飞书 SSE 连接失败:", e);
-      feishuConnected.value = false;
-    }
-    return;
-  }
-
-  const es = new EventSource(`${baseUrl.value || DEFAULT_API_URL}/feishu/events`);
-  eventSource.value = es;
-  feishuConnected.value = true;
-
-  es.onmessage = async (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      handleFeishuEvent(data);
-    } catch (e) {
-      console.error("解析飞书事件失败:", e);
-    }
-  };
-
-  es.onerror = () => {
-    feishuConnected.value = false;
-  };
-
-  es.onopen = () => {
-    feishuConnected.value = true;
-  };
-};
-
-const handleFeishuEvent = async (data) => {
-  if (!data || !data.msgId) return;
-
-  if (processedMsgIds.has(data.msgId)) {
-    return;
-  }
-  processedMsgIds.add(data.msgId);
-
-  if (processedMsgIds.size > 1000) {
-    const firstItem = processedMsgIds.values().next().value;
-    processedMsgIds.delete(firstItem);
-  }
-
-  if (data.msgType === "text" && data.content) {
-    const userMessage = data.content;
-
-    if (!showDialog.value) {
-      showDialog.value = true;
-    }
-
-    messages.value.push({
-      role: "user",
-      content: userMessage,
-    });
-
-    await nextTick();
-    scrollToBottom();
-
-    await sendToAI(userMessage);
-  }
-};
-
-const disconnectFeishuSSE = () => {
-  if (window.electronAPI && window.electronAPI.removeFeishuListener) {
-    window.electronAPI.removeFeishuListener();
-  }
-
-  if (eventSource.value) {
-    eventSource.value.close();
-    eventSource.value = null;
-  }
-  feishuConnected.value = false;
-};
-
-const sendMessage = async () => {
-  const message = inputValue.value.trim();
-  if (!message || loading.value) return;
-
-  messages.value.push({
-    role: "user",
-    content: message,
-  });
-
-  inputValue.value = "";
-  await nextTick();
-  scrollToBottom();
-
-  await sendToAI(message);
-};
-
-const sendToAI = async (message) => {
-  loading.value = true;
-
-  const thinkingMsg = { role: "ai", content: "思考中...", isThinking: true };
-  messages.value.push(thinkingMsg);
-  await nextTick();
-  scrollToBottom();
-
-  try {
-    console.log('[DesktopPet] 发送消息到后端:', message);
-
-    let data;
-    if (window.electronAPI && window.electronAPI.sendMessage) {
-      const sendOptions = {};
-      if (modelId.value) sendOptions.modelId = modelId.value;
-      if (apiKey.value) sendOptions.apiKey = apiKey.value;
-      if (baseUrl.value) sendOptions.baseUrl = baseUrl.value;
-      if (personality.value) sendOptions.personality = personality.value;
-      if (customPrompt.value) sendOptions.customPrompt = customPrompt.value;
-      data = await window.electronAPI.sendMessage(message, sendOptions);
-    } else {
-      const headers = { "Content-Type": "application/json" };
-      if (apiKey.value) {
-        headers["Authorization"] = `Bearer ${apiKey.value}`;
-      }
-      const requestBody = { 
-        message, 
-        modelId: modelId.value || undefined,
-        apiKey: apiKey.value || undefined,
-        baseUrl: baseUrl.value || undefined,
-        personality: personality.value,
-        customPrompt: customPrompt.value || undefined 
-      };
-      const response = await fetch(`${baseUrl.value || DEFAULT_API_URL}/chat`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(requestBody),
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      data = await response.json();
-    }
-
-    const thinkingIndex = messages.value.findIndex((m) => m.isThinking);
-    if (thinkingIndex !== -1) {
-      messages.value.splice(thinkingIndex, 1);
-    }
-
-    if (data.success) {
-      messages.value.push({
-        role: "ai",
-        content: data.response,
-      });
-    } else {
-      messages.value.push({
-        role: "ai",
-        content: "抱歉，处理消息时出现错误: " + (data.error || "未知错误"),
-      });
-    }
-  } catch (error) {
-    console.error("发送消息失败:", error);
-
-    const thinkingIndex = messages.value.findIndex((m) => m.isThinking);
-    if (thinkingIndex !== -1) {
-      messages.value.splice(thinkingIndex, 1);
-    }
-
-    const errorMsg = error.message || error.toString();
-    messages.value.push({
-      role: "ai",
-      content: "连接失败: " + errorMsg,
-    });
-  } finally {
-    loading.value = false;
-    await nextTick();
-    scrollToBottom();
-  }
-};
-
-const scrollToBottom = () => {
-  if (messagesRef.value) {
-    messagesRef.value.scrollTop = messagesRef.value.scrollHeight;
-  }
-};
-
-const startRecording = async () => {
-  if (isRecording.value) return;
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    mediaRecorder.value = new MediaRecorder(stream);
-    audioChunks.value = [];
-
-    mediaRecorder.value.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        audioChunks.value.push(event.data);
-      }
-    };
-
-    mediaRecorder.value.onstop = async () => {
-      const audioBlob = new Blob(audioChunks.value, { type: "audio/webm" });
-      await uploadAudio(audioBlob);
-      stream.getTracks().forEach((track) => track.stop());
-    };
-
-    mediaRecorder.value.start();
-    isRecording.value = true;
-  } catch (error) {
-    console.error("开始录音失败:", error);
-  }
-};
-
-const stopRecording = () => {
-  if (!isRecording.value || !mediaRecorder.value) return;
-
-  if (mediaRecorder.value.state !== "inactive") {
-    mediaRecorder.value.stop();
-  }
-  isRecording.value = false;
-};
-
-const uploadAudio = async (audioBlob) => {
-  loading.value = true;
-
-  const thinkingMsg = { role: "ai", content: "识别语音中...", isThinking: true };
-  messages.value.push(thinkingMsg);
-  await nextTick();
-  scrollToBottom();
-
-  try {
-    const formData = new FormData();
-    formData.append('audio', audioBlob, 'recording.webm');
-    formData.append('channel', 'feishu');
-
-    const response = await axios.post(
-      `${baseUrl.value || DEFAULT_API_URL}/audio/upload`,
-      formData,
-      {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 600000,
-      }
-    );
-
-    if (response.data?.response) {
-      messages.value.push({
-        role: "assistant",
-        content: response.data.response,
-      });
-      await nextTick();
-      scrollToBottom();
-    } else {
-      messages.value.push({
-        role: "ai",
-        content: "语音识别失败: " + (response.data?.error || "无法识别语音内容"),
-      });
-    }
-  } catch (error) {
-    console.error("上传音频失败:", error);
-
-    const thinkingIndex = messages.value.findIndex((m) => m.isThinking);
-    if (thinkingIndex !== -1) {
-      messages.value.splice(thinkingIndex, 1);
-    }
-
-    messages.value.push({
-      role: "ai",
-      content: "语音处理失败，请检查网络或稍后重试。",
-    });
-  } finally {
-    loading.value = false;
-    await nextTick();
-    scrollToBottom();
-  }
-};
-
-onMounted(() => {
-  connectFeishuSSE();
-  setTimeout(loadModel, 500);
-  window.addEventListener('mousemove', onMouseMove);
-  window.addEventListener('mouseup', onMouseUp);
-  setClickThrough(true);
-  scanModels();
-  setTimeout(startReminderSystem, 1000);
-  initScreenInfo();
-  if (window.electronAPI && window.electronAPI.onScreenInfoUpdated) {
-    window.electronAPI.onScreenInfoUpdated(updateScreenInfo);
-  }
-});
+})
 
 onUnmounted(() => {
-  disconnectFeishuSSE();
-  cleanupLive2D();
-  clearAllReminders();
-  window.removeEventListener('mousemove', onMouseMove);
-  window.removeEventListener('mouseup', onMouseUp);
-  if (window.electronAPI && window.electronAPI.removeScreenInfoListener) {
-    window.electronAPI.removeScreenInfoListener();
+  feishu.stop()
+  reminder.clearAll()
+  if (hasElectronApi('removeScreenInfoListener')) {
+    callElectronApi('removeScreenInfoListener')
   }
-});
+})
 </script>
 
-<style scoped>
+<style>
 * {
   margin: 0;
   padding: 0;
@@ -1518,8 +277,15 @@ onUnmounted(() => {
   position: relative;
 }
 
+.pet-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+}
+
 .pet-container {
-  position: absolute;
+  position: relative;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -1546,9 +312,12 @@ onUnmounted(() => {
 }
 
 .dialog-bubble.expanded {
-  width: min(50vw, 600px);
-  height: 50vh;
-  max-height: 50vh;
+  /* Bug #4: 50vh / 50vw bound the bubble to a viewport that itself was
+     being resized by updateWindowSize, producing either oscillation or
+     clipping. Fixed pixels make both ends of the loop deterministic. */
+  width: 480px;
+  height: 480px;
+  max-height: 480px;
 }
 
 .dialog-bubble.dragging {
@@ -1580,24 +349,7 @@ onUnmounted(() => {
   letter-spacing: 0.5px;
 }
 
-.bubble-expand-btn {
-  background: rgba(255, 255, 255, 0.15);
-  border: none;
-  color: var(--text-primary);
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-full);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background var(--transition-fast);
-}
-
-.bubble-expand-btn:hover {
-  background: rgba(255, 255, 255, 0.25);
-}
-
+.bubble-expand-btn,
 .bubble-close {
   background: rgba(255, 255, 255, 0.15);
   border: none;
@@ -1612,6 +364,7 @@ onUnmounted(() => {
   transition: background var(--transition-fast);
 }
 
+.bubble-expand-btn:hover,
 .bubble-close:hover {
   background: rgba(255, 255, 255, 0.25);
 }
@@ -1626,22 +379,11 @@ onUnmounted(() => {
   background: var(--bg-secondary);
 }
 
-.dialog-bubble.expanded .bubble-messages {
-  max-height: none;
-}
+.dialog-bubble.expanded .bubble-messages { max-height: none; }
 
-.bubble-messages::-webkit-scrollbar {
-  width: 4px;
-}
-
-.bubble-messages::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.bubble-messages::-webkit-scrollbar-thumb {
-  background: var(--glass-border);
-  border-radius: var(--radius-sm);
-}
+.bubble-messages::-webkit-scrollbar { width: 4px; }
+.bubble-messages::-webkit-scrollbar-track { background: transparent; }
+.bubble-messages::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: var(--radius-sm); }
 
 .bubble-message {
   margin-bottom: var(--space-sm);
@@ -1650,23 +392,12 @@ onUnmounted(() => {
 }
 
 @keyframes msgSlideIn {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0);   }
 }
 
-.bubble-user {
-  margin-left: auto;
-}
-
-.bubble-ai {
-  margin-right: auto;
-}
+.bubble-user { margin-left: auto; }
+.bubble-ai   { margin-right: auto; }
 
 .bubble-message-content {
   display: inline-block;
@@ -1699,9 +430,7 @@ onUnmounted(() => {
   color: var(--text-muted);
 }
 
-.tool-icon {
-  color: var(--text-muted);
-}
+.tool-icon { color: var(--text-muted); }
 
 .tool-text {
   font-family: monospace;
@@ -1711,11 +440,7 @@ onUnmounted(() => {
   font-size: var(--font-size-xs);
 }
 
-.thinking-indicator {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
+.thinking-indicator { display: flex; align-items: center; gap: 6px; }
 
 .thinking-dots {
   font-style: italic;
@@ -1730,15 +455,9 @@ onUnmounted(() => {
   gap: var(--space-sm);
 }
 
-.audio-icon,
-.tts-icon {
-  color: var(--text-muted);
-}
+.audio-icon, .tts-icon { color: var(--text-muted); }
 
-.audio-player {
-  max-width: 160px;
-  height: 28px;
-}
+.audio-player { max-width: 160px; height: 28px; }
 
 .bubble-input {
   display: flex;
@@ -1760,14 +479,8 @@ onUnmounted(() => {
   transition: border-color var(--transition-fast);
 }
 
-.bubble-input-field::placeholder {
-  color: var(--text-subtle);
-}
-
-.bubble-input-field:focus {
-  border-color: var(--accent-indigo-light);
-}
-
+.bubble-input-field::placeholder { color: var(--text-subtle); }
+.bubble-input-field:focus { border-color: var(--accent-indigo-light); }
 .bubble-input-field:disabled {
   background: var(--bg-secondary);
   cursor: not-allowed;
@@ -1793,26 +506,16 @@ onUnmounted(() => {
   background: var(--accent-indigo-light);
   transform: scale(1.05);
 }
+.bubble-send-btn:active:not(:disabled) { transform: scale(0.95); }
+.bubble-send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.bubble-send-btn:active:not(:disabled) {
-  transform: scale(0.95);
-}
-
-.bubble-send-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.loading-dots {
-  color: var(--text-primary);
-  font-size: var(--font-size-base);
-}
+.loading-dots { color: var(--text-primary); font-size: var(--font-size-base); }
 
 .bubble-record-btn {
   width: 36px;
   height: 36px;
   border-radius: var(--radius-full);
-  border: none;
+  border: 1px solid var(--glass-border);
   background: var(--glass-bg-strong);
   cursor: pointer;
   display: flex;
@@ -1821,18 +524,9 @@ onUnmounted(() => {
   transition: background var(--transition-fast);
   flex-shrink: 0;
   color: var(--text-secondary);
-  border: 1px solid var(--glass-border);
 }
-
-.bubble-record-btn:hover:not(:disabled) {
-  background: var(--glass-bg);
-}
-
-.bubble-record-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
+.bubble-record-btn:hover:not(:disabled) { background: var(--glass-bg); }
+.bubble-record-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .bubble-record-btn.recording {
   background: var(--error);
   color: var(--text-primary);
@@ -1855,34 +549,21 @@ onUnmounted(() => {
   border-bottom: 8px solid var(--glass-bg);
 }
 
-.bubble-fade-enter-active {
-  animation: bubbleIn 0.3s ease-out;
-}
+.bubble-fade-enter-active { animation: bubbleIn 0.3s ease-out; }
+.bubble-fade-leave-active { animation: bubbleOut 0.2s ease-in; }
 
-.bubble-fade-leave-active {
-  animation: bubbleOut 0.2s ease-in;
-}
-
+/* Bug #21: previous keyframes used translateY(-50%) which made the bubble
+   visually jump to the top half of the pet during the animation, even
+   though its resting position is `top: 100%` (below the pet). Drop the Y
+   translation — slide-in from the left + fade is sufficient and matches
+   the bubble's actual landing spot. */
 @keyframes bubbleIn {
-  from {
-    opacity: 0;
-    transform: translateX(-10px) translateY(-50%) scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0) translateY(-50%) scale(1);
-  }
+  from { opacity: 0; transform: translateX(-10px) scale(0.95); }
+  to   { opacity: 1; transform: translateX(0)     scale(1);    }
 }
-
 @keyframes bubbleOut {
-  from {
-    opacity: 1;
-    transform: translateX(0) translateY(-50%) scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: translateX(-10px) translateY(-50%) scale(0.95);
-  }
+  from { opacity: 1; transform: translateX(0)     scale(1);    }
+  to   { opacity: 0; transform: translateX(-10px) scale(0.95); }
 }
 
 /* ===== Live2D ===== */
@@ -1893,9 +574,7 @@ onUnmounted(() => {
   position: relative;
 }
 
-.live2d-wrapper:active {
-  cursor: grabbing;
-}
+.live2d-wrapper:active { cursor: grabbing; }
 
 .resize-handle {
   position: absolute;
@@ -1915,11 +594,7 @@ onUnmounted(() => {
   border-radius: 4px;
   z-index: 10;
 }
-
-.resize-handle:hover {
-  opacity: 1;
-  background: rgba(0, 0, 0, 0.7);
-}
+.resize-handle:hover { opacity: 1; background: rgba(0, 0, 0, 0.7); }
 
 .close-btn {
   position: absolute;
@@ -1940,11 +615,7 @@ onUnmounted(() => {
   z-index: 10;
   padding: 0;
 }
-
-.close-btn:hover {
-  opacity: 1;
-  background: rgba(255, 0, 0, 0.8);
-}
+.close-btn:hover { opacity: 1; background: rgba(255, 0, 0, 0.8); }
 
 #live2d-canvas {
   width: 100%;
@@ -1953,9 +624,14 @@ onUnmounted(() => {
 }
 
 .interaction-bubble {
+  /* Bug #12: positioned to the LEFT of live2d-wrapper used to push the
+     bubble outside the Electron window's left edge (window starts at
+     pet-container's left:0 and the bubble extended to negative X). Move
+     it to the top-right corner of the model instead, where the Electron
+     window already has slack from the ControlButtons row. */
   position: absolute;
-  right: calc(100% + 3px);
-  top: 22%;
+  left: calc(100% + 8px);
+  top: 0;
   padding: 10px 14px;
   max-width: 200px;
   border-radius: var(--radius-lg);
@@ -1976,45 +652,28 @@ onUnmounted(() => {
 }
 
 .interaction-arrow {
+  /* Pointing FROM the bubble TOWARDS the model (model is on the left now). */
   position: absolute;
-  left: 100%;
+  right: 100%;
   top: 50%;
   transform: translateY(-50%);
   width: 0;
   height: 0;
   border-top: 6px solid transparent;
   border-bottom: 6px solid transparent;
-  border-left: 8px solid var(--glass-bg-strong);
+  border-right: 8px solid var(--glass-bg-strong);
 }
 
-.interaction-fade-enter-active {
-  animation: interactionIn 0.3s ease-out;
-}
-
-.interaction-fade-leave-active {
-  animation: interactionOut 0.2s ease-in;
-}
+.interaction-fade-enter-active { animation: interactionIn 0.3s ease-out; }
+.interaction-fade-leave-active { animation: interactionOut 0.2s ease-in; }
 
 @keyframes interactionIn {
-  from {
-    opacity: 0;
-    transform: translateX(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
+  from { opacity: 0; transform: translateX(-10px); }
+  to   { opacity: 1; transform: translateX(0);     }
 }
-
 @keyframes interactionOut {
-  from {
-    opacity: 1;
-    transform: translateX(0);
-  }
-  to {
-    opacity: 0;
-    transform: translateX(-10px);
-  }
+  from { opacity: 1; transform: translateX(0);     }
+  to   { opacity: 0; transform: translateX(-10px); }
 }
 
 .live2d-loading {
@@ -2022,6 +681,7 @@ onUnmounted(() => {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+  z-index: 20;
   color: var(--text-secondary);
   font-size: var(--font-size-base);
   background: var(--glass-bg-strong);
@@ -2043,26 +703,33 @@ onUnmounted(() => {
 }
 
 .toggle-dialog-btn,
-.model-switch-btn {
+.model-switch-btn,
+.settings-btn {
+  /* Bug #11: settings-btn used to be white-on-transparent while the
+     other two were dark-on-grey, making the row look half-finished. Use
+     one consistent base style; per-button accent colours apply only on
+     the .active state below. */
   width: 40px;
   height: 40px;
   border-radius: var(--radius-full);
-  border: none;
   background: #1a1a1a;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all var(--transition-normal);
-  z-index: var(--z-base);
+  z-index: calc(var(--z-modal) + 2);
   color: var(--text-secondary);
   border: 1px solid #333;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15);
 }
 
 .toggle-dialog-btn:hover,
-.model-switch-btn:hover {
+.model-switch-btn:hover,
+.settings-btn:hover {
   transform: scale(1.1);
   background: #2a2a2a;
+  color: var(--text-primary);
 }
 
 .toggle-dialog-btn.active {
@@ -2071,6 +738,11 @@ onUnmounted(() => {
 }
 
 .model-switch-btn.active {
+  background: var(--accent-amber);
+  color: var(--text-primary);
+}
+
+.settings-btn.active {
   background: var(--accent-amber);
   color: var(--text-primary);
 }
@@ -2084,39 +756,31 @@ onUnmounted(() => {
   color: var(--text-secondary);
 }
 
-.markdown-body :deep(p) {
-  margin: 0 0 var(--space-sm) 0;
-}
+.markdown-body p { margin: 0 0 var(--space-sm) 0; }
+.markdown-body p:last-child { margin-bottom: 0; }
 
-.markdown-body :deep(p:last-child) {
-  margin-bottom: 0;
-}
-
-.markdown-body :deep(h1),
-.markdown-body :deep(h2),
-.markdown-body :deep(h3),
-.markdown-body :deep(h4) {
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
   margin: var(--space-md) 0 var(--space-sm) 0;
   font-weight: 600;
   line-height: 1.3;
   color: var(--text-primary);
 }
 
-.markdown-body :deep(h1) { font-size: var(--font-size-lg); }
-.markdown-body :deep(h2) { font-size: var(--font-size-md); }
-.markdown-body :deep(h3) { font-size: var(--font-size-base); }
+.markdown-body h1 { font-size: var(--font-size-lg); }
+.markdown-body h2 { font-size: var(--font-size-md); }
+.markdown-body h3 { font-size: var(--font-size-base); }
 
-.markdown-body :deep(ul),
-.markdown-body :deep(ol) {
+.markdown-body ul,
+.markdown-body ol {
   margin: var(--space-sm) 0;
   padding-left: 20px;
 }
+.markdown-body li { margin: 2px 0; }
 
-.markdown-body :deep(li) {
-  margin: 2px 0;
-}
-
-.markdown-body :deep(code) {
+.markdown-body code {
   background: var(--glass-bg-strong);
   padding: 2px 6px;
   border-radius: var(--radius-sm);
@@ -2125,7 +789,7 @@ onUnmounted(() => {
   color: var(--accent-indigo-light);
 }
 
-.markdown-body :deep(pre) {
+.markdown-body pre {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   padding: var(--space-md);
@@ -2136,15 +800,9 @@ onUnmounted(() => {
   line-height: 1.5;
   border: 1px solid var(--glass-border);
 }
+.markdown-body pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
 
-.markdown-body :deep(pre code) {
-  background: none;
-  padding: 0;
-  color: inherit;
-  font-size: inherit;
-}
-
-.markdown-body :deep(blockquote) {
+.markdown-body blockquote {
   border-left: 3px solid var(--accent-indigo);
   padding: var(--space-sm) var(--space-md);
   margin: var(--space-sm) 0;
@@ -2153,60 +811,49 @@ onUnmounted(() => {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
-.markdown-body :deep(table) {
+.markdown-body table {
   width: 100%;
   border-collapse: collapse;
   margin: var(--space-sm) 0;
   font-size: var(--font-size-sm);
 }
-
-.markdown-body :deep(th),
-.markdown-body :deep(td) {
+.markdown-body th,
+.markdown-body td {
   border: 1px solid var(--glass-border);
   padding: var(--space-sm);
   text-align: left;
 }
-
-.markdown-body :deep(th) {
+.markdown-body th {
   background: var(--glass-bg-strong);
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.markdown-body :deep(a) {
-  color: var(--accent-indigo-light);
-  text-decoration: none;
-}
+.markdown-body a { color: var(--accent-indigo-light); text-decoration: none; }
+.markdown-body a:hover { text-decoration: underline; }
 
-.markdown-body :deep(a:hover) {
-  text-decoration: underline;
-}
-
-.markdown-body :deep(hr) {
+.markdown-body hr {
   border: none;
   border-top: 1px solid var(--glass-border);
   margin: var(--space-md) 0;
 }
 
-.markdown-body :deep(img) {
+.markdown-body img {
   max-width: 100%;
   border-radius: var(--radius-sm);
   margin: var(--space-sm) 0;
 }
 
-.markdown-body :deep(strong) {
-  font-weight: 600;
-  color: var(--text-primary);
-}
+.markdown-body strong { font-weight: 600; color: var(--text-primary); }
 
 /* ===== 皮肤选择器 - Glassmorphism + Amber ===== */
 .model-picker {
-  position: absolute;
-  right: 100%;
-  top: 50%;
-  transform: translateY(-50%);
-  margin-right: 20px;
+  flex-shrink: 0;
   width: 220px;
+  height: 100%;
+  margin-right: 20px;
+  display: flex;
+  flex-direction: column;
   border-radius: var(--radius-lg);
   overflow: hidden;
   z-index: calc(var(--z-modal) + 1);
@@ -2240,30 +887,19 @@ onUnmounted(() => {
   justify-content: center;
   transition: background var(--transition-fast);
 }
-
-.picker-close:hover {
-  background: rgba(255, 255, 255, 0.25);
-}
+.picker-close:hover { background: rgba(255, 255, 255, 0.25); }
 
 .picker-list {
   padding: var(--space-sm);
-  max-height: 240px;
+  flex: 1;
+  min-height: 0;
+  max-height: none;
   overflow-y: auto;
   background: var(--bg-secondary);
 }
-
-.picker-list::-webkit-scrollbar {
-  width: 4px;
-}
-
-.picker-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.picker-list::-webkit-scrollbar-thumb {
-  background: var(--glass-border);
-  border-radius: var(--radius-sm);
-}
+.picker-list::-webkit-scrollbar { width: 4px; }
+.picker-list::-webkit-scrollbar-track { background: transparent; }
+.picker-list::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: var(--radius-sm); }
 
 .picker-item {
   display: flex;
@@ -2275,45 +911,22 @@ onUnmounted(() => {
   transition: all var(--transition-fast);
   margin-bottom: 2px;
 }
-
-.picker-item:last-child {
-  margin-bottom: 0;
-}
-
-.picker-item:hover {
-  background: var(--glass-bg-strong);
-}
-
+.picker-item:last-child { margin-bottom: 0; }
+.picker-item:hover { background: var(--glass-bg-strong); }
 .picker-item.active {
   background: rgba(217, 119, 6, 0.15);
   border: 1px solid rgba(217, 119, 6, 0.3);
 }
-
-.picker-item-icon {
-  flex-shrink: 0;
-  color: var(--text-muted);
-}
-
-.picker-item.active .picker-item-icon {
-  color: var(--accent-amber);
-}
-
+.picker-item-icon { flex-shrink: 0; color: var(--text-muted); }
+.picker-item.active .picker-item-icon { color: var(--accent-amber); }
 .picker-item-name {
   flex: 1;
   font-size: var(--font-size-base);
   color: var(--text-secondary);
   font-weight: 500;
 }
-
-.picker-item.active .picker-item-name {
-  color: var(--accent-amber);
-  font-weight: 600;
-}
-
-.picker-check {
-  color: var(--accent-amber);
-  flex-shrink: 0;
-}
+.picker-item.active .picker-item-name { color: var(--accent-amber); font-weight: 600; }
+.picker-check { color: var(--accent-amber); flex-shrink: 0; }
 
 .picker-empty {
   text-align: center;
@@ -2323,12 +936,12 @@ onUnmounted(() => {
 }
 
 .settings-panel {
-  position: absolute;
-  right: 100%;
-  top: 50%;
-  transform: translateY(-50%);
-  margin-right: 20px;
+  flex-shrink: 0;
   width: 280px;
+  height: 100%;
+  margin-right: 20px;
+  display: flex;
+  flex-direction: column;
   border-radius: var(--radius-lg);
   overflow: hidden;
   z-index: 1001;
@@ -2339,14 +952,13 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   background: var(--bg-secondary);
 }
 
-.settings-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
+.settings-field { display: flex; flex-direction: column; gap: 6px; }
 
 .settings-label {
   font-size: var(--font-size-sm);
@@ -2354,22 +966,7 @@ onUnmounted(() => {
   color: var(--text-secondary);
 }
 
-.settings-input {
-  padding: 8px 12px;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-md);
-  background: var(--glass-bg);
-  color: var(--text-primary);
-  font-size: var(--font-size-sm);
-  font-family: inherit;
-  outline: none;
-  transition: border-color 0.2s ease;
-}
-
-.settings-input:focus {
-  border-color: var(--accent-amber);
-}
-
+.settings-input,
 .settings-textarea {
   padding: 8px 12px;
   border: 1px solid var(--glass-border);
@@ -2380,12 +977,10 @@ onUnmounted(() => {
   font-family: inherit;
   outline: none;
   transition: border-color 0.2s ease;
-  resize: vertical;
 }
-
-.settings-textarea:focus {
-  border-color: var(--accent-amber);
-}
+.settings-textarea { resize: vertical; }
+.settings-input:focus,
+.settings-textarea:focus { border-color: var(--accent-amber); }
 
 .settings-save-btn {
   padding: 8px 16px;
@@ -2398,15 +993,10 @@ onUnmounted(() => {
   cursor: pointer;
   transition: opacity 0.2s ease;
 }
+.settings-save-btn:hover { opacity: 0.85; }
+.settings-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.settings-save-btn:hover {
-  opacity: 0.85;
-}
-
-.personality-options {
-  display: flex;
-  gap: var(--space-sm);
-}
+.personality-options { display: flex; gap: var(--space-sm); }
 
 .personality-btn {
   flex: 1;
@@ -2420,70 +1010,24 @@ onUnmounted(() => {
   cursor: pointer;
   transition: all var(--transition-fast);
 }
-
-.personality-btn:hover {
-  background: var(--glass-bg-strong);
-  border-color: var(--accent-amber);
-}
-
+.personality-btn:hover { background: var(--glass-bg-strong); border-color: var(--accent-amber); }
 .personality-btn.active {
   background: var(--accent-amber);
   color: white;
   border-color: var(--accent-amber);
 }
 
-.settings-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #555;
-  transition: all 0.2s ease;
-}
+.settings-btn:hover { background: #2a2a2a; color: var(--text-primary); }
 
-.settings-btn:hover {
-  background: rgba(255, 255, 255, 1);
-  color: #333;
-}
-
-.settings-btn.active {
-  background: var(--accent-amber);
-  color: white;
-}
-
-.picker-fade-enter-active {
-  animation: pickerIn 0.25s ease-out;
-}
-
-.picker-fade-leave-active {
-  animation: pickerOut 0.15s ease-in;
-}
+.picker-fade-enter-active { animation: pickerIn 0.25s ease-out; }
+.picker-fade-leave-active { animation: pickerOut 0.15s ease-in; }
 
 @keyframes pickerIn {
-  from {
-    opacity: 0;
-    transform: translateX(-10px) translateY(-50%) scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0) translateY(-50%) scale(1);
-  }
+  from { opacity: 0; transform: translateX(-10px) scale(0.95); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
 }
-
 @keyframes pickerOut {
-  from {
-    opacity: 1;
-    transform: translateX(0) translateY(-50%) scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: translateX(-10px) translateY(-50%) scale(0.95);
-  }
+  from { opacity: 1; transform: translateX(0) scale(1); }
+  to   { opacity: 0; transform: translateX(-10px) scale(0.95); }
 }
 </style>

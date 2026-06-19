@@ -250,6 +250,7 @@ class AgentDefaults(Base):
 
     workspace: str = "~/.nanobot/workspace"
     model: str = "anthropic/claude-opus-4-5"
+    fast_model: str = ""  # Empty = use model (main model) for page summarization
     provider: str = (
         "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
     )
@@ -260,6 +261,10 @@ class AgentDefaults(Base):
     # Deprecated compatibility field: accepted from old configs but ignored at runtime.
     memory_window: int | None = Field(default=None, exclude=True)
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode
+    # Frontend-managed persona settings (persisted via the /settings API).
+    personality: str = "gentle"  # gentle / active / tsundere
+    custom_prompt: str = ""  # User-supplied system prompt; empty = use defaults
+    birthday: str = ""  # ISO date (YYYY-MM-DD); empty = unknown
 
     @property
     def should_warn_deprecated_memory_window(self) -> bool:
@@ -324,10 +329,42 @@ class GatewayConfig(Base):
 
 
 class WebSearchConfig(Base):
-    """Web search tool configuration."""
+    """Web search tool configuration (Playwright + Bing)."""
 
-    api_key: str = ""  # Brave Search API key
     max_results: int = 5
+    base_url: str = "https://cn.bing.com/search"
+    headless: bool = True
+    timeout_s: int = 30
+    min_interval_s: float = 3.0
+    max_retries: int = 1
+
+
+class DeepResearchConfig(Base):
+    """Deep iterative web research configuration."""
+
+    max_pages: int = 15
+    max_rounds: int = 5
+    pages_per_round: int = 3
+    serp_per_round: int = 5
+    fetch_max_chars: int = 8000
+    fetch_concurrency: int = 3
+    page_timeout_s: int = 20
+    total_timeout_s: int = 120
+    min_confidence_to_stop: Literal["low", "medium", "high"] = "medium"
+
+
+class DeepResearchConfig(Base):
+    """Deep iterative web research configuration."""
+
+    max_pages: int = 15
+    max_rounds: int = 5
+    pages_per_round: int = 3
+    serp_per_round: int = 5
+    fetch_max_chars: int = 8000
+    fetch_concurrency: int = 3
+    page_timeout_s: int = 20
+    total_timeout_s: int = 120
+    min_confidence_to_stop: Literal["low", "medium", "high"] = "medium"
 
 
 class WebToolsConfig(Base):
@@ -337,6 +374,8 @@ class WebToolsConfig(Base):
         None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
     )
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
+    research: DeepResearchConfig = Field(default_factory=DeepResearchConfig)
+    research: DeepResearchConfig = Field(default_factory=DeepResearchConfig)
 
 
 class ExecToolConfig(Base):

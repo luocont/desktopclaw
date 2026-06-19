@@ -54,7 +54,7 @@ function killByPorts() {
  */
 function killByName() {
   const result = [];
-  // desktopclaw 的 Python 后端进程（命令行中含 desktopclaw api）
+  // desktopclaw 的 Python 后端进程（命令行中含 desktopclaw api/gateway）
   try {
     const cmd = `wmic process where "name='python.exe'" get ProcessId,CommandLine /format:csv`;
     const out = execSync(cmd, { encoding: 'utf8', timeout: 5000, stdio: 'pipe' });
@@ -72,14 +72,39 @@ function killByName() {
   return result;
 }
 
+/**
+ * Kill stale DesktopClaw Electron dev instances (same --dev flag, project path).
+ * Avoids GPU cache lock conflicts when restart.bat without closing the pet.
+ */
+function killStaleElectron() {
+  const result = [];
+  const projectMarker = 'desktopclaw';
+  try {
+    const cmd = `wmic process where "name='electron.exe'" get ProcessId,CommandLine /format:csv`;
+    const out = execSync(cmd, { encoding: 'utf8', timeout: 5000, stdio: 'pipe' });
+    const lines = out.trim().split(/\r?\n/);
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line || !line.includes('--dev')) continue;
+      if (!line.toLowerCase().includes(projectMarker)) continue;
+      const parts = line.split(',');
+      const pid = parseInt(parts[parts.length - 1]);
+      if (isNaN(pid) || pid === process.pid) continue;
+      if (windowsKill(pid)) result.push(`electron dev (pid ${pid})`);
+    }
+  } catch {}
+  return result;
+}
+
 function killResidualProcesses() {
   console.log('[Cleanup] Checking for leftover processes from previous run...');
 
   const killedByPort = killByPorts();
   const killedByName = killByName();
+  const killedElectron = killStaleElectron();
 
   // 去重
-  const all = [...new Set([...killedByPort, ...killedByName])];
+  const all = [...new Set([...killedByPort, ...killedByName, ...killedElectron])];
 
   if (all.length > 0) {
     console.log(`[Cleanup] Killed residual processes: ${all.join(', ')}`);
@@ -146,12 +171,21 @@ function installFrontendDeps() {
 }
 
 function checkBackendDeps() {
+  const expected = BACKEND_DIR.replace(/\\/g, '\\\\');
+  const cmd = [
+    'python -c "',
+    'import pathlib, desktopclaw, sys;',
+    `e=pathlib.Path(r'${expected}').resolve();`,
+    'a=pathlib.Path(desktopclaw.__file__).resolve().parent.parent;',
+    'sys.exit(0 if a==e else 1)',
+    '"',
+  ].join(' ');
   try {
-    execSync('python -c "import desktopclaw"', { cwd: BACKEND_DIR, stdio: 'pipe', timeout: 10000 });
-    console.log('[DepCheck] Python backend deps OK');
+    execSync(cmd, { cwd: BACKEND_DIR, stdio: 'pipe', timeout: 15000 });
+    console.log('[DepCheck] Python backend deps OK (workspace)');
     return true;
   } catch {
-    console.log('[DepCheck] Python backend deps missing');
+    console.log('[DepCheck] Backend not linked to workspace — will reinstall');
     return false;
   }
 }

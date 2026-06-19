@@ -33,7 +33,7 @@ const startBackend = () => {
             args = ['-m', 'desktopclaw', 'api', '--port', '3000']
         } else {
             backendPath = path.join(__dirname, '../backend/desktopclaw.exe')
-            args = []
+            args = ['api', '--port', '3000']
         }
 
         console.log('[Electron] Starting backend:', backendPath, args)
@@ -130,7 +130,7 @@ const createWindow = () => {
     // 获取主显示器信息，用于初始窗口位置
     const primary = screen.getPrimaryDisplay()
     const workArea = primary.workArea
-    const petW = 300, petH = 400
+    const petW = 360, petH = 400
     // 初始位置：主屏右下角
     const initX = workArea.x + workArea.width - petW - 50
     const initY = workArea.y + workArea.height - petH - 50

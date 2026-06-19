@@ -48,6 +48,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+web-search = [
+    "playwright>=1.49.0,<2.0.0",
+]
 wecom = [
     "wecom-aibot-sdk-python>=0.1.2",
 ]

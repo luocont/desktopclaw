@@ -2,7 +2,6 @@
 
 import html
 import json
-import os
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -11,6 +10,7 @@ import httpx
 from loguru import logger
 
 from desktopclaw.agent.tools.base import Tool
+from desktopclaw.agent.tools.bing_search import BingSearchBackend, PLAYWRIGHT_INSTALL_HINT
 
 # Shared constants
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36"
@@ -45,10 +45,14 @@ def _validate_url(url: str) -> tuple[bool, str]:
 
 
 class WebSearchTool(Tool):
-    """Search the web using Brave Search API."""
+    """Search the web via Bing using Playwright browser automation."""
 
     name = "web_search"
-    description = "Search the web. Returns titles, URLs, and snippets."
+    description = (
+        "Search the web for real-time information via Bing. "
+        "Returns titles, URLs, and snippets. "
+        "Note: automated Bing access may violate Microsoft's terms of service."
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -58,49 +62,31 @@ class WebSearchTool(Tool):
         "required": ["query"]
     }
 
-    def __init__(self, api_key: str | None = None, max_results: int = 5, proxy: str | None = None):
-        self._init_api_key = api_key
+    def __init__(self, backend: BingSearchBackend, max_results: int = 5):
+        self._backend = backend
         self.max_results = max_results
-        self.proxy = proxy
-
-    @property
-    def api_key(self) -> str:
-        """Resolve API key at call time so env/config changes are picked up."""
-        return self._init_api_key or os.environ.get("BRAVE_API_KEY", "")
 
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
-        if not self.api_key:
-            return (
-                "Error: Brave Search API key not configured. Set it in "
-                "~/.nanobot/config.json under tools.web.search.apiKey "
-                "(or export BRAVE_API_KEY), then restart the gateway."
-            )
-
         try:
             n = min(max(count or self.max_results, 1), 10)
-            logger.debug("WebSearch: {}", "proxy enabled" if self.proxy else "direct connection")
-            async with httpx.AsyncClient(proxy=self.proxy) as client:
-                r = await client.get(
-                    "https://api.search.brave.com/res/v1/web/search",
-                    params={"q": query, "count": n},
-                    headers={"Accept": "application/json", "X-Subscription-Token": self.api_key},
-                    timeout=10.0
-                )
-                r.raise_for_status()
+            logger.debug("WebSearch: Bing query={!r}, count={}", query, n)
+            results = await self._backend.search(query, n)
 
-            results = r.json().get("web", {}).get("results", [])[:n]
             if not results:
                 return f"No results for: {query}"
 
             lines = [f"Results for: {query}\n"]
             for i, item in enumerate(results, 1):
-                lines.append(f"{i}. {item.get('title', '')}\n   {item.get('url', '')}")
-                if desc := item.get("description"):
-                    lines.append(f"   {desc}")
+                lines.append(f"{i}. {item.title}\n   {item.url}")
+                if item.snippet:
+                    lines.append(f"   {item.snippet}")
             return "\n".join(lines)
-        except httpx.ProxyError as e:
-            logger.error("WebSearch proxy error: {}", e)
-            return f"Proxy error: {e}"
+        except RuntimeError as e:
+            msg = str(e)
+            if PLAYWRIGHT_INSTALL_HINT in msg or "Playwright is not installed" in msg:
+                return f"Error: {msg}"
+            logger.error("WebSearch error: {}", e)
+            return f"Error: {e}"
         except Exception as e:
             logger.error("WebSearch error: {}", e)
             return f"Error: {e}"

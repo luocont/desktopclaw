@@ -22,14 +22,16 @@ from desktopclaw.agent.tools.message import MessageTool
 from desktopclaw.agent.tools.registry import ToolRegistry
 from desktopclaw.agent.tools.shell import ExecTool
 from desktopclaw.agent.tools.spawn import SpawnTool
-from desktopclaw.agent.tools.web import WebFetchTool, WebSearchTool
+from desktopclaw.agent.research.loop import ResearchLoop
+from desktopclaw.agent.tools.bing_search import BingSearchBackend
+from desktopclaw.agent.tools.deep_web_search import DeepWebSearchTool
 from desktopclaw.bus.events import InboundMessage, OutboundMessage
 from desktopclaw.bus.queue import MessageBus
 from desktopclaw.providers.base import LLMProvider
 from desktopclaw.session.manager import Session, SessionManager
 
 if TYPE_CHECKING:
-    from desktopclaw.config.schema import ChannelsConfig, ExecToolConfig
+    from desktopclaw.config.schema import ChannelsConfig, DeepResearchConfig, ExecToolConfig, WebSearchConfig
     from desktopclaw.cron.service import CronService
 
 
@@ -53,10 +55,12 @@ class AgentLoop:
         provider: LLMProvider,
         workspace: Path,
         model: str | None = None,
+        fast_model: str | None = None,
         max_iterations: int = 40,
         context_window_tokens: int = 65_536,
-        brave_api_key: str | None = None,
         web_proxy: str | None = None,
+        search_config: WebSearchConfig | None = None,
+        research_config: DeepResearchConfig | None = None,
         exec_config: ExecToolConfig | None = None,
         cron_service: CronService | None = None,
         restrict_to_workspace: bool = False,
@@ -64,17 +68,29 @@ class AgentLoop:
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
     ):
-        from desktopclaw.config.schema import ExecToolConfig
+        from desktopclaw.config.schema import DeepResearchConfig, ExecToolConfig, WebSearchConfig
         self.bus = bus
         self.channels_config = channels_config
         self.provider = provider
         self.workspace = workspace
         logger.info(f"[AgentLoop.__init__] model param: {model}, provider.get_default_model(): {provider.get_default_model()}")
         self.model = model if model else provider.get_default_model()
+        self._fast_model = fast_model or ""
         self.max_iterations = max_iterations
         self.context_window_tokens = context_window_tokens
-        self.brave_api_key = brave_api_key
         self.web_proxy = web_proxy
+        self._search_config = search_config or WebSearchConfig()
+        self._research_config = research_config or DeepResearchConfig()
+        self._bing_backend = BingSearchBackend(config=self._search_config, proxy=web_proxy)
+        self._research_loop = ResearchLoop(
+            provider=provider,
+            main_model=self.model,
+            fast_model=self._fast_model or None,
+            bing_backend=self._bing_backend,
+            web_proxy=web_proxy,
+            config=self._research_config,
+        )
+        self._deep_web_search_tool = DeepWebSearchTool(research_loop=self._research_loop)
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
@@ -87,7 +103,6 @@ class AgentLoop:
             workspace=workspace,
             bus=bus,
             model=self.model,
-            brave_api_key=brave_api_key,
             web_proxy=web_proxy,
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
@@ -122,8 +137,7 @@ class AgentLoop:
             restrict_to_workspace=self.restrict_to_workspace,
             path_append=self.exec_config.path_append,
         ))
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
-        self.tools.register(WebFetchTool(proxy=self.web_proxy))
+        self.tools.register(self._deep_web_search_tool)
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
@@ -151,12 +165,20 @@ class AgentLoop:
         finally:
             self._mcp_connecting = False
 
-    def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
-        """Update context for all tools that need routing info."""
+    def _set_tool_context(
+        self,
+        channel: str,
+        chat_id: str,
+        message_id: str | None = None,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
+        """Update context for all tools that need routing info or progress callbacks."""
         for name in ("message", "spawn", "cron"):
             if tool := self.tools.get(name):
                 if hasattr(tool, "set_context"):
                     tool.set_context(channel, chat_id, *([message_id] if name == "message" else []))
+        if on_progress and hasattr(self._deep_web_search_tool, "set_progress_callback"):
+            self._deep_web_search_tool.set_progress_callback(on_progress)
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -199,6 +221,11 @@ class AgentLoop:
 
             chat_model = model or self.model
             logger.info(f"[_run_agent_loop] model param: {model}, self.model: {self.model}, chat_model: {chat_model}")
+            if hasattr(self._deep_web_search_tool, "set_research_context"):
+                self._deep_web_search_tool.set_research_context(
+                    main_model=chat_model,
+                    fast_model=self._fast_model or chat_model,
+                )
             chat_kwargs = {
                 "messages": messages,
                 "tools": tool_defs,
@@ -337,13 +364,14 @@ class AgentLoop:
                 ))
 
     async def close_mcp(self) -> None:
-        """Close MCP connections."""
+        """Close MCP connections and Bing search browser."""
         if self._mcp_stack:
             try:
                 await self._mcp_stack.aclose()
             except (RuntimeError, BaseExceptionGroup):
                 pass  # MCP SDK cancel scope cleanup is noisy but harmless
             self._mcp_stack = None
+        await self._bing_backend.close()
 
     def stop(self) -> None:
         """Stop the agent loop."""
@@ -425,7 +453,18 @@ class AgentLoop:
             )
         await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
-        self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
+        async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
+            meta = dict(msg.metadata or {})
+            meta["_progress"] = True
+            meta["_tool_hint"] = tool_hint
+            await self.bus.publish_outbound(OutboundMessage(
+                channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
+            ))
+
+        progress_cb = on_progress or _bus_progress
+        self._set_tool_context(
+            msg.channel, msg.chat_id, msg.metadata.get("message_id"), on_progress=progress_cb,
+        )
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()

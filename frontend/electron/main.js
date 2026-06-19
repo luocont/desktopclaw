@@ -7,6 +7,12 @@ const { spawn, execSync } = require('child_process')
 // 检测是否在开发模式：检查是否有 VITE 开发服务器运行，或通过环境变量
 const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev')
 
+// Avoid GPU disk-cache lock conflicts when multiple dev instances overlap.
+app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')
+if (isDev) {
+    app.setPath('userData', path.join(app.getPath('appData'), 'DesktopClaw-dev'))
+}
+
 let win
 let feishuSSEController = null
 let backendProcess = null
@@ -39,14 +45,17 @@ const startBackend = () => {
         let cwd
         
         if (isDev) {
+            const backendDir = path.join(__dirname, '..', '..', 'backend')
             backendPath = 'python'
             args = ['-m', 'desktopclaw', 'api', '--port', '3000']
-            cwd = path.join(__dirname, '..', '..')
+            cwd = backendDir
         } else {
             backendPath = path.join(getResourcePath('backend'), 'desktopclaw.exe')
-            args = []
+            args = ['api', '--port', '3000']
             cwd = undefined
         }
+
+        const backendDir = isDev ? path.join(__dirname, '..', '..', 'backend') : null
 
         console.log('[Electron] Starting backend:', backendPath, args, 'cwd:', cwd)
 
@@ -55,7 +64,12 @@ const startBackend = () => {
             cwd: cwd,
             stdio: ['ignore', 'pipe', 'pipe'],
             shell: true,
-            env: { ...process.env, PYTHONIOENCODING: 'utf-8', LANG: 'en_US.UTF-8' }
+            env: {
+                ...process.env,
+                PYTHONIOENCODING: 'utf-8',
+                LANG: 'en_US.UTF-8',
+                ...(backendDir ? { PYTHONPATH: backendDir } : {}),
+            }
         })
 
         backendProcess.stdout.on('data', (data) => {
@@ -145,7 +159,8 @@ const createWindow = () => {
     // 获取主显示器信息，用于初始窗口位置
     const primary = screen.getPrimaryDisplay()
     const workArea = primary.workArea
-    const petW = 300, petH = 400
+    // Include the control-button column to the right of the model (≈60px).
+    const petW = 360, petH = 400
     // 初始位置：主屏右下角
     const initX = workArea.x + workArea.width - petW - 50
     const initY = workArea.y + workArea.height - petH - 50
@@ -215,15 +230,13 @@ const createWindow = () => {
     })
 }
 
-app.on('ready', async () => {
-    try {
-        console.log('[Electron] Starting backend service...')
-        await startBackend()
-        console.log('[Electron] Backend started successfully')
-    } catch (err) {
-        console.error('[Electron] Failed to start backend:', err)
-    }
+app.on('ready', () => {
+    // Show the pet window immediately; Live2D does not depend on the backend.
     createWindow()
+    console.log('[Electron] Starting backend service...')
+    startBackend()
+        .then(() => console.log('[Electron] Backend started successfully'))
+        .catch((err) => console.error('[Electron] Failed to start backend:', err))
 })
 
 // will-quit 在 app.exit(0) 时触发，确保后端进程被杀死
@@ -265,7 +278,12 @@ ipcMain.handle('set-ignore-mouse-events', (event, ignore, options) => {
 // IPC handler for resizing and positioning the pet window
 ipcMain.handle('resize-pet-window', (event, x, y, width, height) => {
     if (win && !win.isDestroyed()) {
-        win.setBounds({ x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) })
+        win.setBounds({
+            x: Math.round(x),
+            y: Math.round(y),
+            width: Math.max(Math.round(width), 120),
+            height: Math.max(Math.round(height), 120),
+        })
     }
 })
 
