@@ -32,3 +32,31 @@ electron-builder-effective-config.yaml
 *.sw?
 .DS_Store
 Thumbs.db
+
+# 7. Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# 8. 后端打包二进制与运行时依赖
+backend/_internal/
+backend/*.exe
+backend/*.dll
+backend/*.pyd
+backend/*.pkg
+backend/case/*.gif
+
+# 9. Electron 运行时与构建产物
+electron/
+
+# 10. 前端静态资源（模型、图片、音频、第三方库等）
+frontend/public/
+public/
+
+# 11. PyInstaller / 构建输出
+build/
+dist/
