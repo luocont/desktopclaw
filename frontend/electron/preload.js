@@ -13,5 +13,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   setIgnoreMouseEvents: (ignore, options) => ipcRenderer.invoke('set-ignore-mouse-events', ignore, options),
   scanLive2DModels: () => ipcRenderer.invoke('scan-live2d-models'),
-  resizePetWindow: (x, y, width, height) => ipcRenderer.invoke('resize-pet-window', x, y, width, height)
+  resizePetWindow: (x, y, width, height) => ipcRenderer.invoke('resize-pet-window', x, y, width, height),
+  
+  loadSettings: () => ipcRenderer.invoke('load-settings'),
+  saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings)
 })

@@ -1,23 +1,46 @@
 const { spawn } = require('child_process');
-const waitOn = require('wait-on');
+const http = require('http');
 
-// 启动 Vite 开发服务器
+function checkPort(port) {
+  return new Promise((resolve) => {
+    const req = http.request({
+      hostname: 'localhost',
+      port: port,
+      path: '/',
+      method: 'GET',
+      timeout: 2000
+    }, (res) => {
+      resolve(true);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.end();
+  });
+}
+
+async function waitForVite(maxAttempts = 30) {
+  for (let i = 0; i < maxAttempts; i++) {
+    for (const port of [5173, 5174, 5175, 5176]) {
+      const ok = await checkPort(port);
+      if (ok) return port;
+    }
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  throw new Error('Vite server did not start within 30 seconds');
+}
+
 const vite = spawn('npm', ['run', 'dev'], {
   stdio: 'inherit',
   shell: true
 });
 
-// 等待 Vite 服务器启动
-waitOn({
-  resources: ['http://localhost:5173'],
-  timeout: 30000
-}).then(() => {
-  console.log('Vite server ready, starting Electron...');
+waitForVite().then((port) => {
+  console.log(`Vite server ready on port ${port}, starting Electron...`);
 
-  // 启动 Electron
   const electron = spawn('electron', ['.', '--dev'], {
     stdio: 'inherit',
-    shell: true
+    shell: true,
+    env: { ...process.env, VITE_PORT: port }
   });
 
   electron.on('close', (code) => {
@@ -31,7 +54,6 @@ waitOn({
   process.exit(1);
 });
 
-// 处理 Ctrl+C
 process.on('SIGINT', () => {
   vite.kill();
   process.exit(0);

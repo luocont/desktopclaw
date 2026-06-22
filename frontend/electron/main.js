@@ -2,12 +2,147 @@ const {app,BrowserWindow,ipcMain,shell} = require('electron')
 const path = require('path')
 const fs = require('fs')
 const http = require('http')
+const { spawn } = require('child_process')
 
 // 检测是否在开发模式：检查是否有 VITE 开发服务器运行，或通过环境变量
 const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev')
 
 let win
 let feishuSSEController = null
+let backendProcess = null
+
+// 设置文件路径
+const settingsPath = path.join(app.getPath('userData'), 'settings.json')
+
+// 读取设置
+function loadSettings() {
+    try {
+        if (fs.existsSync(settingsPath)) {
+            const data = fs.readFileSync(settingsPath, 'utf8')
+            return JSON.parse(data)
+        }
+    } catch (error) {
+        console.error('[Electron] Failed to load settings:', error)
+    }
+    return {}
+}
+
+// 保存设置
+function saveSettings(settings) {
+    try {
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2))
+        return true
+    } catch (error) {
+        console.error('[Electron] Failed to save settings:', error)
+        return false
+    }
+}
+
+// 获取资源路径，兼容开发和生产模式
+const getResourcePath = (relativePath) => {
+    if (isDev) {
+        return path.join(__dirname, '..', relativePath)
+    } else {
+        return path.join(process.resourcesPath, relativePath)
+    }
+}
+
+const startBackend = () => {
+    return new Promise((resolve, reject) => {
+        // Check if backend is already running
+        const checkExisting = http.request({
+            hostname: '127.0.0.1',
+            port: 18790,
+            path: '/health',
+            method: 'GET'
+        }, (res) => {
+            if (res.statusCode === 200) {
+                console.log('[Electron] Backend already running, reusing existing instance')
+                resolve()
+                return
+            }
+            startNewBackend(resolve, reject)
+        })
+
+        checkExisting.on('error', () => {
+            startNewBackend(resolve, reject)
+        })
+
+        checkExisting.end()
+    })
+}
+
+const startNewBackend = (resolve, reject) => {
+    let backendPath
+    let args
+    let cwd
+    
+    if (isDev) {
+        backendPath = 'python'
+        args = ['-m', 'desktopclaw', 'api', '--port', '18790']
+        cwd = path.join(__dirname, '..', '..', 'backend')
+    } else {
+        backendPath = path.join(getResourcePath('backend'), 'desktopclaw.exe')
+        args = []
+        cwd = undefined
+    }
+
+    console.log('[Electron] Starting backend:', backendPath, args, 'cwd:', cwd)
+
+    backendProcess = spawn(backendPath, args, {
+        detached: false,
+        cwd: cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: true
+    })
+
+    backendProcess.stdout.on('data', (data) => {
+        console.log('[Backend]', data.toString().trim())
+    })
+
+    backendProcess.stderr.on('data', (data) => {
+        console.log('[Backend Error]', data.toString().trim())
+    })
+
+    backendProcess.on('close', (code) => {
+        console.log('[Electron] Backend process closed with code:', code)
+        backendProcess = null
+    })
+
+    backendProcess.on('error', (err) => {
+        console.error('[Electron] Failed to start backend:', err)
+        reject(err)
+    })
+
+    const checkBackendReady = (attempt) => {
+        if (attempt > 60) {
+            reject(new Error('Backend failed to start within 60 seconds'))
+            return
+        }
+
+        const req = http.request({
+            hostname: '127.0.0.1',
+            port: 18790,
+            path: '/health',
+            method: 'GET'
+        }, (res) => {
+            if (res.statusCode === 200) {
+                console.log('[Electron] Backend is ready')
+                resolve()
+            } else {
+                setTimeout(() => checkBackendReady(attempt + 1), 1000)
+            }
+        })
+
+        req.on('error', () => {
+            setTimeout(() => checkBackendReady(attempt + 1), 1000)
+        })
+
+        req.end()
+    }
+
+    setTimeout(() => checkBackendReady(0), 2000)
+}
 
 const createWindow = () => {
     if(win)return
@@ -36,26 +171,37 @@ const createWindow = () => {
         callback({
             responseHeaders: {
                 ...details.responseHeaders,
-                'Content-Security-Policy': ["default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; media-src 'self' blob: http://127.0.0.1:3000 https://127.0.0.1:3000; connect-src 'self' blob: http://127.0.0.1:3000 https://127.0.0.1:3000 ws://localhost:5173 wss://localhost:5173;"]
+                'Content-Security-Policy': ["default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; media-src 'self' blob: http://127.0.0.1:18790 https://127.0.0.1:18790; connect-src 'self' blob: http://127.0.0.1:18790 https://127.0.0.1:18790 ws://localhost:5173 wss://localhost:5173;"]
             }
         })
     })
     
     //win.loadFile('../index.html')
     if (isDev) {
-        win.loadURL('http://localhost:5173')
-        // 如需调试可取消下面这行注释：
-        // win.webContents.openDevTools()
+        const vitePort = process.env.VITE_PORT || '5173'
+        win.loadURL(`http://localhost:${vitePort}`)
       } else {
-        win.loadFile(path.join(__dirname, '../dist/index.html'))
+        win.loadFile(path.join(getResourcePath('dist'), 'index.html'))
       }
 }
 
-app.on('ready', () => {
+app.on('ready', async () => {
+    try {
+        console.log('[Electron] Starting backend service...')
+        await startBackend()
+        console.log('[Electron] Backend started successfully')
+    } catch (err) {
+        console.error('[Electron] Failed to start backend:', err)
+    }
     createWindow()
 })
 
 app.on('window-all-closed',() => {
+    if (backendProcess) {
+        console.log('[Electron] Killing backend process...')
+        backendProcess.kill()
+        backendProcess = null
+    }
     if(process.platform !== 'darwin')app.quit()
 })
 
@@ -68,6 +214,16 @@ ipcMain.handle('set-ignore-mouse-events', (event, ignore, options) => {
     if (win && !win.isDestroyed()) {
         win.setIgnoreMouseEvents(ignore, options)
     }
+})
+
+// IPC handler for loading settings from file
+ipcMain.handle('load-settings', (event) => {
+    return loadSettings()
+})
+
+// IPC handler for saving settings to file
+ipcMain.handle('save-settings', (event, settings) => {
+    return saveSettings(settings)
 })
 
 // IPC handler for resizing and positioning the pet window
@@ -94,7 +250,7 @@ ipcMain.handle('send-message', async (event, message, options = {}) => {
 
         const reqOptions = {
             hostname: '127.0.0.1',
-            port: 3000,
+            port: 18790,
             path: '/chat',
             method: 'POST',
             headers
@@ -139,7 +295,7 @@ ipcMain.handle('connect-feishu-sse', async (event) => {
         
         const options = {
             hostname: '127.0.0.1',
-            port: 3000,
+            port: 18790,
             path: '/feishu/events',
             method: 'GET',
             signal: feishuSSEController.signal
@@ -204,7 +360,7 @@ ipcMain.handle('disconnect-feishu-sse', async (event) => {
 
 // IPC handler for scanning available Live2D models in public directory
 ipcMain.handle('scan-live2d-models', async (event) => {
-    const publicDir = path.join(__dirname, '../public')
+    const publicDir = getResourcePath('public')
     
     try {
         if (!fs.existsSync(publicDir)) {

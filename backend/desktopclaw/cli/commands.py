@@ -609,6 +609,7 @@ def api(
     )
 
     async def run():
+        api_server = None
         try:
             # Start agent loop
             agent_task = asyncio.create_task(agent_loop.run())
@@ -625,10 +626,18 @@ def api(
 
         except KeyboardInterrupt:
             console.print("\n[yellow]Shutting down...[/yellow]")
+        except OSError as e:
+            if "10048" in str(e) or "already in use" in str(e).lower():
+                console.print(f"[red]✗[/red] Port {port} is already in use. Please close the process using this port and try again.")
+                console.print(f"[dim]Run: Get-NetTCPConnection -LocalPort {port} | Select-Object OwningProcess[/dim]")
+            else:
+                console.print(f"[red]✗[/red] Failed to start server: {e}")
         finally:
-            await api_server.stop()
+            if api_server:
+                await api_server.stop()
             agent_loop.stop()
-            await agent_task
+            if 'agent_task' in locals():
+                await agent_task
             await agent_loop.close_mcp()
             console.print("[green]✓[/green] Server stopped")
 

@@ -81,29 +81,17 @@
               v-model="inputValue"
               @keyup.enter="sendMessage"
               placeholder="和我说点什么..."
-              :disabled="loading || isRecording"
+              :disabled="loading"
               class="bubble-input-field"
             />
             <button
               @click="sendMessage"
-              :disabled="loading || !inputValue.trim() || isRecording"
+              :disabled="loading || !inputValue.trim()"
               class="bubble-send-btn"
               aria-label="发送消息"
             >
               <Send :size="16" v-if="!loading" />
               <span v-else class="loading-dots">...</span>
-            </button>
-            <button
-              @mousedown="startRecording"
-              @mouseup="stopRecording"
-              @mouseleave="stopRecording"
-              @touchstart.prevent="startRecording"
-              @touchend.prevent="stopRecording"
-              :disabled="loading"
-              :class="['bubble-record-btn', { recording: isRecording }]"
-              :aria-label="isRecording ? '停止录音' : '开始录音'"
-            >
-              <Mic :size="16" />
             </button>
           </div>
           <div class="bubble-arrow"></div>
@@ -288,7 +276,6 @@ import DOMPurify from 'dompurify';
 import {
   MessageCircle,
   X,
-  Mic,
   Send,
   Palette,
   Check,
@@ -317,9 +304,6 @@ const messagesRef = ref(null);
 const eventSource = ref(null);
 const feishuConnected = ref(false);
 const processedMsgIds = new Set();
-const isRecording = ref(false);
-const mediaRecorder = ref(null);
-const audioChunks = ref([]);
 
 const showDialog = ref(false);
 const dialogBubble = ref(null);
@@ -364,7 +348,7 @@ const resizeStartX = ref(0);
 const resizeStartY = ref(0);
 const resizeStartScale = ref(1);
 
-const DEFAULT_API_URL = "http://127.0.0.1:3000";
+const DEFAULT_API_URL = "http://127.0.0.1:18790";
 const storedBaseUrl = localStorage.getItem('pet_base_url') || '';
 const storedApiKey = localStorage.getItem('pet_api_key') || '';
 const storedModelId = localStorage.getItem('pet_model_id') || '';
@@ -885,13 +869,46 @@ async function scanModels() {
   }
 }
 
+async function loadSettingsFromFile() {
+  if (window.electronAPI && window.electronAPI.loadSettings) {
+    try {
+      const settings = await window.electronAPI.loadSettings();
+      if (settings) {
+        if (settings.baseUrl !== undefined) baseUrl.value = settings.baseUrl;
+        if (settings.apiKey !== undefined) apiKey.value = settings.apiKey;
+        if (settings.modelId !== undefined) modelId.value = settings.modelId;
+        if (settings.personality !== undefined) personality.value = settings.personality;
+        if (settings.birthday !== undefined) birthday.value = settings.birthday;
+        if (settings.customPrompt !== undefined) customPrompt.value = settings.customPrompt;
+      }
+    } catch (error) {
+      console.error('Failed to load settings from file:', error);
+    }
+  }
+}
+
 function saveSettings() {
+  const settings = {
+    baseUrl: baseUrl.value,
+    apiKey: apiKey.value,
+    modelId: modelId.value,
+    personality: personality.value,
+    birthday: birthday.value,
+    customPrompt: customPrompt.value
+  };
+  
+  if (window.electronAPI && window.electronAPI.saveSettings) {
+    window.electronAPI.saveSettings(settings).catch(console.error);
+  }
+  
+  // 同时保存到 localStorage 作为备份
   localStorage.setItem('pet_base_url', baseUrl.value);
   localStorage.setItem('pet_api_key', apiKey.value);
   localStorage.setItem('pet_model_id', modelId.value);
   localStorage.setItem('pet_personality', personality.value);
   localStorage.setItem('pet_birthday', birthday.value);
   localStorage.setItem('pet_custom_prompt', customPrompt.value);
+  
   showSettings.value = false;
 }
 
@@ -1302,96 +1319,6 @@ const scrollToBottom = () => {
   }
 };
 
-const startRecording = async () => {
-  if (isRecording.value) return;
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    mediaRecorder.value = new MediaRecorder(stream);
-    audioChunks.value = [];
-
-    mediaRecorder.value.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        audioChunks.value.push(event.data);
-      }
-    };
-
-    mediaRecorder.value.onstop = async () => {
-      const audioBlob = new Blob(audioChunks.value, { type: "audio/webm" });
-      await uploadAudio(audioBlob);
-      stream.getTracks().forEach((track) => track.stop());
-    };
-
-    mediaRecorder.value.start();
-    isRecording.value = true;
-  } catch (error) {
-    console.error("开始录音失败:", error);
-  }
-};
-
-const stopRecording = () => {
-  if (!isRecording.value || !mediaRecorder.value) return;
-
-  if (mediaRecorder.value.state !== "inactive") {
-    mediaRecorder.value.stop();
-  }
-  isRecording.value = false;
-};
-
-const uploadAudio = async (audioBlob) => {
-  loading.value = true;
-
-  const thinkingMsg = { role: "ai", content: "识别语音中...", isThinking: true };
-  messages.value.push(thinkingMsg);
-  await nextTick();
-  scrollToBottom();
-
-  try {
-    const formData = new FormData();
-    formData.append('audio', audioBlob, 'recording.webm');
-    formData.append('channel', 'feishu');
-
-    const response = await axios.post(
-      `${baseUrl.value || DEFAULT_API_URL}/audio/upload`,
-      formData,
-      {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 600000,
-      }
-    );
-
-    if (response.data?.response) {
-      messages.value.push({
-        role: "assistant",
-        content: response.data.response,
-      });
-      await nextTick();
-      scrollToBottom();
-    } else {
-      messages.value.push({
-        role: "ai",
-        content: "语音识别失败: " + (response.data?.error || "无法识别语音内容"),
-      });
-    }
-  } catch (error) {
-    console.error("上传音频失败:", error);
-
-    const thinkingIndex = messages.value.findIndex((m) => m.isThinking);
-    if (thinkingIndex !== -1) {
-      messages.value.splice(thinkingIndex, 1);
-    }
-
-    messages.value.push({
-      role: "ai",
-      content: "语音处理失败，请检查网络或稍后重试。",
-    });
-  } finally {
-    loading.value = false;
-    await nextTick();
-    scrollToBottom();
-  }
-};
-
 onMounted(() => {
   connectFeishuSSE();
   setTimeout(loadModel, 500);
@@ -1400,6 +1327,7 @@ onMounted(() => {
   setClickThrough(true);
   scanModels();
   setTimeout(startReminderSystem, 1000);
+  loadSettingsFromFile();
 });
 
 onUnmounted(() => {
@@ -1711,37 +1639,6 @@ onUnmounted(() => {
 .loading-dots {
   color: var(--text-primary);
   font-size: var(--font-size-base);
-}
-
-.bubble-record-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-full);
-  border: none;
-  background: var(--glass-bg-strong);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background var(--transition-fast);
-  flex-shrink: 0;
-  color: var(--text-secondary);
-  border: 1px solid var(--glass-border);
-}
-
-.bubble-record-btn:hover:not(:disabled) {
-  background: var(--glass-bg);
-}
-
-.bubble-record-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.bubble-record-btn.recording {
-  background: var(--error);
-  color: var(--text-primary);
-  animation: pulse 1s infinite;
 }
 
 @keyframes pulse {
@@ -2274,6 +2171,14 @@ onUnmounted(() => {
 
 .settings-input:focus {
   border-color: var(--accent-amber);
+}
+
+.settings-checkbox {
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  cursor: pointer;
+  accent-color: var(--accent-indigo);
 }
 
 .settings-textarea {
