@@ -65,15 +65,24 @@ class ResearchLoop:
         on_progress: ProgressCallback = None,
         max_pages: int | None = None,
         max_rounds: int | None = None,
+        sub_questions: list[str] | None = None,
+        constraints: str | None = None,
     ) -> ResearchReport:
         cfg = self.config
         pages_cap = min(max(max_pages or cfg.max_pages, 1), 20)
         rounds_cap = min(max(max_rounds or cfg.max_rounds, 1), 10)
 
+        # Seed the search agent with the main agent's analyzed brief so its
+        # very first planning round is informed (instead of echoing raw input).
+        seed_questions = [
+            q.strip() for q in (sub_questions or []) if isinstance(q, str) and q.strip()
+        ]
         state = ResearchState(
             question=question,
             pages_budget=pages_cap,
             max_pages=pages_cap,
+            constraints=(constraints or "").strip(),
+            open_questions=seed_questions,
         )
 
         async def progress(msg: str) -> None:

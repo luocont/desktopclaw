@@ -5,33 +5,49 @@ from pathlib import Path
 from typing import Any
 
 from desktopclaw.agent.tools.base import Tool
+from desktopclaw.agent.tools.sandbox import is_within_allowed, normalize_allowed_dirs
 
 
 def _resolve_path(
-    path: str, workspace: Path | None = None, allowed_dir: Path | None = None
+    path: str,
+    workspace: Path | None = None,
+    allowed_dirs: list[Path] | None = None,
 ) -> Path:
-    """Resolve path against workspace (if relative) and enforce directory restriction."""
+    """Resolve path against workspace (if relative) and enforce directory restriction.
+
+    ``allowed_dirs`` is the set of permitted roots; an empty / None set means the
+    sandbox is disabled (unrestricted access).
+    """
     p = Path(path).expanduser()
     if not p.is_absolute() and workspace:
         p = workspace / p
     resolved = p.resolve()
-    if allowed_dir:
-        try:
-            resolved.relative_to(allowed_dir.resolve())
-        except ValueError:
-            raise PermissionError(f"Path {path} is outside allowed directory {allowed_dir}")
+    if allowed_dirs and not is_within_allowed(resolved, allowed_dirs):
+        roots = ", ".join(str(d) for d in allowed_dirs)
+        raise PermissionError(f"Path {path} is outside allowed directories ({roots})")
     return resolved
 
 
 class _FsTool(Tool):
     """Shared base for filesystem tools — common init and path resolution."""
 
-    def __init__(self, workspace: Path | None = None, allowed_dir: Path | None = None):
+    def __init__(
+        self,
+        workspace: Path | None = None,
+        allowed_dir: Path | None = None,
+        allowed_paths: list[str] | None = None,
+    ):
         self._workspace = workspace
-        self._allowed_dir = allowed_dir
+        # Sandbox is enabled when a workspace root is pinned via ``allowed_dir``.
+        # Extra whitelisted roots come from ``allowed_paths``. ``allowed_dir=None``
+        # keeps the legacy "unrestricted" behaviour.
+        if allowed_dir is None:
+            self._allowed_dirs: list[Path] = []
+        else:
+            self._allowed_dirs = normalize_allowed_dirs(allowed_dir, allowed_paths)
 
     def _resolve(self, path: str) -> Path:
-        return _resolve_path(path, self._workspace, self._allowed_dir)
+        return _resolve_path(path, self._workspace, self._allowed_dirs)
 
 
 # ---------------------------------------------------------------------------

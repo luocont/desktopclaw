@@ -189,6 +189,19 @@ class SessionManager:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
 
+    def delete(self, key: str) -> bool:
+        """Delete a session file and remove it from the in-memory cache."""
+        self._cache.pop(key, None)
+        path = self._get_session_path(key)
+        if not path.exists():
+            return False
+        try:
+            path.unlink()
+            return True
+        except OSError as e:
+            logger.warning("Failed to delete session {}: {}", key, e)
+            return False
+
     def list_sessions(self) -> list[dict[str, Any]]:
         """
         List all sessions.

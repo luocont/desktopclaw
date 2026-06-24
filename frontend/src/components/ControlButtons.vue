@@ -6,9 +6,8 @@
     <button
       class="toggle-dialog-btn"
       @click.stop="$emit('toggle', 'dialog')"
-      :class="{ active: dialog }"
-      title="打开对话框"
-      :aria-label="dialog ? '关闭对话框' : '打开对话框'"
+      title="打开聊天窗口"
+      aria-label="打开聊天窗口"
     >
       <MessageCircle :size="iconSize" />
     </button>
@@ -39,7 +38,6 @@ import { MessageCircle, Palette, Settings } from 'lucide-vue-next'
 
 const props = defineProps({
   scale: { type: Number, default: 1 },
-  dialog: { type: Boolean, default: false },
   modelPicker: { type: Boolean, default: false },
   settings: { type: Boolean, default: false },
 })

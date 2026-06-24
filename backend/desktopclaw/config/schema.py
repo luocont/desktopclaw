@@ -245,6 +245,32 @@ class ChannelsConfig(Base):
     weixin: WeixinConfig = Field(default_factory=WeixinConfig)
 
 
+class MemoryConfig(Base):
+    """Agent strategy memory configuration (ReasoningBank + MRAgent)."""
+
+    enabled: bool = True
+    embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
+    embedding_cache_dir: str = ""
+    # Qwen3 is MRL (Matryoshka) capable — truncate for storage/latency balance.
+    embedding_truncate_dim: int = 512
+    # Qwen3 is instruction-aware: queries need the "query" prompt.
+    embedding_query_prompt: str = "query"
+    embedding_batch_size: int = 8
+    # Hot-path query embed timeout (seconds). On expiry → keyword fallback.
+    embedding_timeout_s: float = 3.0
+    # Async background indexer.
+    index_worker_enabled: bool = True
+    index_worker_interval_s: float = 2.0  # batch flush interval when idle
+    index_max_retries: int = 3
+    preload_embedding_on_start: bool = True
+    retrieval_top_k: int = 3
+    mragent_max_iterations: int = 3
+    dynamic_retrieval: bool = True
+    distillation: bool = True
+    distillation_min_confidence: float = 0.6
+    fast_retrieval_on_tool_error: bool = True
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -276,6 +302,7 @@ class AgentsConfig(Base):
     """Agent configuration."""
 
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
 
 class ProviderConfig(Base):
@@ -353,20 +380,6 @@ class DeepResearchConfig(Base):
     min_confidence_to_stop: Literal["low", "medium", "high"] = "medium"
 
 
-class DeepResearchConfig(Base):
-    """Deep iterative web research configuration."""
-
-    max_pages: int = 15
-    max_rounds: int = 5
-    pages_per_round: int = 3
-    serp_per_round: int = 5
-    fetch_max_chars: int = 8000
-    fetch_concurrency: int = 3
-    page_timeout_s: int = 20
-    total_timeout_s: int = 120
-    min_confidence_to_stop: Literal["low", "medium", "high"] = "medium"
-
-
 class WebToolsConfig(Base):
     """Web tools configuration."""
 
@@ -374,7 +387,6 @@ class WebToolsConfig(Base):
         None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
     )
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
-    research: DeepResearchConfig = Field(default_factory=DeepResearchConfig)
     research: DeepResearchConfig = Field(default_factory=DeepResearchConfig)
 
 
@@ -402,7 +414,12 @@ class ToolsConfig(Base):
 
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
-    restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
+    # Default ON: confine file/shell tools to the workspace so the agent cannot
+    # pollute the rest of the machine. Add extra roots via ``allowed_paths``.
+    restrict_to_workspace: bool = True
+    # Extra directories the agent may read/write/execute in when
+    # ``restrict_to_workspace`` is enabled (absolute paths or ~ shortcuts).
+    allowed_paths: list[str] = Field(default_factory=list)
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
 

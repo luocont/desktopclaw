@@ -56,6 +56,9 @@ class ResearchState:
     round: int = 0
     pages_budget: int = 15
     max_pages: int = 15
+    # Constraints supplied by the main agent's analysis (recency, region,
+    # source preferences, scope limits). Steers planning + synthesis.
+    constraints: str = ""
     searched_queries: list[str] = field(default_factory=list)
     read_urls: set[str] = field(default_factory=set)
     known_facts: list[Claim] = field(default_factory=list)
@@ -75,6 +78,8 @@ class ResearchState:
             f"Searched queries: {', '.join(self.searched_queries) or 'none'}",
             f"Open questions: {self.open_questions or ['none']}",
         ]
+        if self.constraints:
+            lines.insert(1, f"Constraints: {self.constraints}")
         if self.known_facts:
             lines.append("Known facts:")
             for c in self.known_facts[:20]:

@@ -155,7 +155,8 @@ function playRandomMotion() {
   } catch (e) { console.warn('交互动画失败:', e) }
 }
 
-async function loadModel(canvas) {
+async function loadModel(canvas, options = {}) {
+  const { interactive = true } = options
   try {
     modelError.value = ''
     await waitForCubismCore()
@@ -168,7 +169,12 @@ async function loadModel(canvas) {
     setupWatermarkRemoval()
     playStartupAnimation()
     startIdleAnimation()
-    setupModelInteraction()
+    if (interactive) {
+      setupModelInteraction()
+    } else if (model) {
+      model.eventMode = 'none'
+      model.cursor = 'default'
+    }
   } catch (err) {
     console.error('Live2D 初始化失败:', err)
     modelError.value = err?.message || '模型加载失败'
@@ -195,7 +201,7 @@ function cleanup() {
   }
 }
 
-async function switchModel(path, canvas) {
+async function switchModel(path, canvas, options = {}) {
   // Bug #16: callers used to fish the canvas out via
   // document.getElementById('live2d-canvas') because switchModel demanded
   // it. The PIXI app keeps a `view` reference once initialized, so
@@ -203,7 +209,7 @@ async function switchModel(path, canvas) {
   currentModelUrl.value = path
   cleanupModel()
   const reuseCanvas = canvas || app?.view || null
-  await loadModel(reuseCanvas)
+  await loadModel(reuseCanvas, options)
 }
 
 async function scanModels() {

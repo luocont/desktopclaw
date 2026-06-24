@@ -8,6 +8,8 @@ from typing import Any
 
 from loguru import logger
 
+from desktopclaw.utils.usage import get_tracker
+
 
 @dataclass
 class ToolCallRequest:
@@ -244,6 +246,7 @@ class LLMProvider(ABC):
                 )
 
             if response.finish_reason != "error":
+                self._record_usage(response)
                 return response
             if not self._is_transient_error(response.content):
                 return response
@@ -259,7 +262,7 @@ class LLMProvider(ABC):
             await asyncio.sleep(delay)
 
         try:
-            return await self.chat(
+            response = await self.chat(
                 messages=messages,
                 tools=tools,
                 model=model,
@@ -272,6 +275,8 @@ class LLMProvider(ABC):
                 personality=personality,
                 custom_prompt=custom_prompt,
             )
+            self._record_usage(response)
+            return response
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -279,6 +284,12 @@ class LLMProvider(ABC):
                 content=f"Error calling LLM: {exc}",
                 finish_reason="error",
             )
+
+    @staticmethod
+    def _record_usage(response: LLMResponse) -> None:
+        tracker = get_tracker()
+        if tracker and response.usage:
+            tracker.merge(response.usage)
 
     @abstractmethod
     def get_default_model(self) -> str:

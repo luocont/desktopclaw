@@ -1,13 +1,21 @@
 """Subagent manager for background task execution."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+if TYPE_CHECKING:
+    from desktopclaw.agent.memory.distiller import StrategyDistiller
+    from desktopclaw.agent.memory.retriever import MRAgentRetriever
+    from desktopclaw.config.schema import MemoryConfig
+
+from desktopclaw.agent.memory.triggers import TriggerState, should_retrieve_before_llm
 from desktopclaw.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from desktopclaw.agent.tools.registry import ToolRegistry
 from desktopclaw.agent.tools.shell import ExecTool
@@ -16,6 +24,7 @@ from desktopclaw.bus.queue import MessageBus
 from desktopclaw.config.schema import ExecToolConfig
 from desktopclaw.providers.base import LLMProvider
 from desktopclaw.utils.helpers import build_assistant_message
+from desktopclaw.utils.usage import UsageTracker, reset_tracker, set_tracker
 
 
 class SubagentManager:
@@ -30,8 +39,12 @@ class SubagentManager:
         web_proxy: str | None = None,
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
+        allowed_paths: list[str] | None = None,
+        memory_retriever: MRAgentRetriever | None = None,
+        strategy_distiller: StrategyDistiller | None = None,
+        memory_config: MemoryConfig | None = None,
     ):
-        from desktopclaw.config.schema import ExecToolConfig
+        from desktopclaw.config.schema import ExecToolConfig, MemoryConfig
         self.provider = provider
         self.workspace = workspace
         self.bus = bus
@@ -39,8 +52,13 @@ class SubagentManager:
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
+        self.allowed_paths = allowed_paths or []
+        self.memory_retriever = memory_retriever
+        self.strategy_distiller = strategy_distiller
+        self.memory_config = memory_config or MemoryConfig()
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
+        self._pending_usage: dict[str, UsageTracker] = {}
 
     async def spawn(
         self,
@@ -56,7 +74,7 @@ class SubagentManager:
         origin = {"channel": origin_channel, "chat_id": origin_chat_id}
 
         bg_task = asyncio.create_task(
-            self._run_subagent(task_id, task, display_label, origin)
+            self._run_subagent(task_id, task, display_label, origin, session_key)
         )
         self._running_tasks[task_id] = bg_task
         if session_key:
@@ -80,38 +98,51 @@ class SubagentManager:
         task: str,
         label: str,
         origin: dict[str, str],
+        session_key: str | None = None,
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info("Subagent [{}] starting task: {}", task_id, label)
 
+        tracker = UsageTracker(current_source="subagent")
+        tracker_token = set_tracker(tracker)
         try:
             # Build subagent tools (no message tool, no spawn tool)
             tools = ToolRegistry()
             allowed_dir = self.workspace if self.restrict_to_workspace else None
-            tools.register(ReadFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
-            tools.register(WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
-            tools.register(EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
-            tools.register(ListDirTool(workspace=self.workspace, allowed_dir=allowed_dir))
+            tools.register(ReadFileTool(workspace=self.workspace, allowed_dir=allowed_dir, allowed_paths=self.allowed_paths))
+            tools.register(WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir, allowed_paths=self.allowed_paths))
+            tools.register(EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir, allowed_paths=self.allowed_paths))
+            tools.register(ListDirTool(workspace=self.workspace, allowed_dir=allowed_dir, allowed_paths=self.allowed_paths))
             tools.register(ExecTool(
                 working_dir=str(self.workspace),
                 timeout=self.exec_config.timeout,
                 restrict_to_workspace=self.restrict_to_workspace,
                 path_append=self.exec_config.path_append,
+                allowed_paths=self.allowed_paths,
             ))
             
-            system_prompt = self._build_subagent_prompt()
+            system_prompt = await self._build_subagent_prompt(task, session_key)
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": task},
             ]
 
-            # Run agent loop (limited iterations)
             max_iterations = 15
             iteration = 0
             final_result: str | None = None
+            status = "ok"
+            trigger_state = TriggerState()
+            dynamic = self.memory_config.enabled and self.memory_config.dynamic_retrieval
 
             while iteration < max_iterations:
                 iteration += 1
+
+                if dynamic and self.memory_retriever:
+                    level = should_retrieve_before_llm(trigger_state)
+                    if level:
+                        messages = await self.memory_retriever.retrieve_and_inject(
+                            messages, level, session_key=session_key,
+                        )
 
                 response = await self.provider.chat_with_retry(
                     messages=messages,
@@ -142,6 +173,10 @@ class SubagentManager:
                             "name": tool_call.name,
                             "content": result,
                         })
+                        if dynamic and self.memory_retriever and self.memory_config.fast_retrieval_on_tool_error:
+                            level = trigger_state.record_tool_result(tool_call.name, result)
+                            if level:
+                                trigger_state.pending_retrieval = level
                 else:
                     final_result = response.content
                     break
@@ -149,13 +184,37 @@ class SubagentManager:
             if final_result is None:
                 final_result = "Task completed but no final response was generated."
 
+            if self.strategy_distiller:
+                await self.strategy_distiller.distill_from_subagent(task, messages, status)
+
             logger.info("Subagent [{}] completed successfully", task_id)
-            await self._announce_result(task_id, label, task, final_result, origin, "ok")
+            await self._announce_result(task_id, label, task, final_result, origin, status)
 
         except Exception as e:
             error_msg = f"Error: {str(e)}"
+            status = "error"
             logger.error("Subagent [{}] failed: {}", task_id, e)
-            await self._announce_result(task_id, label, task, error_msg, origin, "error")
+            if self.strategy_distiller:
+                await self.strategy_distiller.distill_from_subagent(
+                    task, [{"role": "user", "content": task}, {"role": "assistant", "content": error_msg}],
+                    status,
+                )
+            await self._announce_result(task_id, label, task, error_msg, origin, status)
+        finally:
+            reset_tracker(tracker_token)
+            if session_key:
+                self._stash_pending_usage(session_key, tracker)
+
+    def _stash_pending_usage(self, session_key: str, tracker: UsageTracker) -> None:
+        existing = self._pending_usage.get(session_key)
+        if existing:
+            existing.merge_tracker(tracker)
+        else:
+            self._pending_usage[session_key] = tracker
+
+    def pop_pending_usage(self, session_key: str) -> dict:
+        tracker = self._pending_usage.pop(session_key, None)
+        return tracker.to_dict() if tracker else {}
 
     async def _announce_result(
         self,
@@ -189,9 +248,10 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
         await self.bus.publish_inbound(msg)
         logger.debug("Subagent [{}] announced result to {}:{}", task_id, origin['channel'], origin['chat_id'])
     
-    def _build_subagent_prompt(self) -> str:
+    async def _build_subagent_prompt(self, task: str, session_key: str | None = None) -> str:
         """Build a focused system prompt for the subagent."""
         from desktopclaw.agent.context import ContextBuilder
+        from desktopclaw.agent.memory.triggers import subagent_start_level
         from desktopclaw.agent.skills import SkillsLoader
 
         time_ctx = ContextBuilder._build_runtime_context(None, None)
@@ -204,6 +264,15 @@ Stay focused on the assigned task. Your final response will be reported back to 
 
 ## Workspace
 {self.workspace}"""]
+
+        if self.memory_retriever and self.memory_retriever.enabled:
+            from desktopclaw.agent.memory import injector
+            result = await self.memory_retriever.retrieve(
+                task, subagent_start_level(), session_key=session_key,
+            )
+            block = injector.format_strategies(result.units)
+            if block:
+                parts.append(block)
 
         skills_summary = SkillsLoader(self.workspace).build_skills_summary()
         if skills_summary:

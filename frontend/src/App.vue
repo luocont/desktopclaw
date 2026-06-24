@@ -38,6 +38,8 @@
         ref="petContainer"
         :style="petContainerStyle"
       >
+        <!-- 原气泡对话框暂时停用，聊天按钮改为打开新 UI 窗口 -->
+        <!--
         <ChatPanel
           :visible="showDialog"
           :expanded="isDialogExpanded"
@@ -46,12 +48,12 @@
           @sized="onDialogSized"
           ref="chatPanelRef"
         />
+        -->
 
         <Live2DStage @close="closePet" ref="live2dStageRef" />
 
         <ControlButtons
           :scale="live2d.petScale.value"
-          :dialog="showDialog"
           :modelPicker="showModelPicker"
           :settings="showSettings"
           @toggle="onTogglePanel"
@@ -63,28 +65,30 @@
 
 <script setup>
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
-import ChatPanel from './components/ChatPanel.vue'
+// import ChatPanel from './components/ChatPanel.vue'
 import Live2DStage from './components/Live2DStage.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import ModelPicker from './components/ModelPicker.vue'
 import ControlButtons from './components/ControlButtons.vue'
 import { useLive2D } from './stores/useLive2D.js'
 import { useSettings } from './stores/useSettings.js'
+import { useChat } from './stores/useChat.js'
+import { useConversations } from './stores/useConversations.js'
 import { useReminder } from './stores/useReminder.js'
 import { useFeishuSSE } from './composables/useFeishuSSE.js'
 import { useClickThrough } from './composables/useClickThrough.js'
 import { hasElectronApi, callElectronApi, getElectronApi } from './utils/electronBridge.js'
 
 // ---- Top-level UI panel toggles -----------------------------------------
-const showDialog = ref(false)
-const isDialogExpanded = ref(false)
+// const showDialog = ref(false)
+// const isDialogExpanded = ref(false)
 const showModelPicker = ref(false)
 const showSettings = ref(false)
 
 const petContainer = ref(null)
 const petRow = ref(null)
 const wrapperEl = ref(null)
-const chatPanelRef = ref(null)
+// const chatPanelRef = ref(null)
 const live2dStageRef = ref(null)
 const settingsPanelRef = ref(null)
 const modelPickerRef = ref(null)
@@ -95,6 +99,8 @@ let petAnchorScreenX = null
 // ---- Stores --------------------------------------------------------------
 const live2d = useLive2D()
 const settings = useSettings()
+const chat = useChat()
+const conversations = useConversations()
 const reminder = useReminder()
 const feishu = useFeishuSSE()
 const click = useClickThrough()
@@ -117,7 +123,7 @@ function collectOverflowRects() {
     if (style.display === 'none' || style.visibility === 'hidden') return
     rects.push(el.getBoundingClientRect())
   }
-  if (showDialog.value) add(chatPanelRef.value?.bubbleEl)
+  // if (showDialog.value) add(chatPanelRef.value?.bubbleEl)
   add(petContainer.value?.querySelector('.interaction-bubble'))
   return rects
 }
@@ -184,7 +190,7 @@ function onPanelOpened() {
 }
 
 watch(
-  [showDialog, isDialogExpanded, showModelPicker, showSettings, () => live2d.petScale.value],
+  [showModelPicker, showSettings, () => live2d.petScale.value],
   async () => {
     await nextTick()
     setTimeout(updateWindowSize, 50)
@@ -198,9 +204,9 @@ watch(
   },
 )
 
-function onDialogSized() {
-  setTimeout(updateWindowSize, 50)
-}
+// function onDialogSized() {
+//   setTimeout(updateWindowSize, 50)
+// }
 
 // ---- Click-through (transparent area passes mouse events to OS) --------
 function onPetAreaEnter() { click.set(false) }
@@ -208,9 +214,21 @@ function onPetAreaLeave() { click.set(true) }
 
 // ---- Panel exclusivity --------------------------------------------------
 function onTogglePanel(which) {
-  showDialog.value      = which === 'dialog'      ? !showDialog.value      : false
+  if (which === 'dialog') {
+    openChatWindow()
+    return
+  }
+  // showDialog.value      = which === 'dialog'      ? !showDialog.value      : false
   showModelPicker.value = which === 'modelPicker' ? !showModelPicker.value : false
   showSettings.value    = which === 'settings'    ? !showSettings.value    : false
+}
+
+function openChatWindow() {
+  conversations.saveCurrent(chat.messages.value)
+  conversations.syncSnapshot()
+  showModelPicker.value = false
+  showSettings.value = false
+  callElectronApi('switchUiMode', 'chat')
 }
 
 async function onPickModel(path) {
@@ -231,11 +249,23 @@ function closePet() {
   }
 }
 
+watch(
+  () => chat.messages.value,
+  () => {
+    if (chat.loading.value) return
+    conversations.saveCurrent(chat.messages.value)
+  },
+  { deep: true },
+)
+
 // ---- Lifecycle ----------------------------------------------------------
 onMounted(async () => {
   click.set(true)
 
   settings.loadFromBackend()
+  const historyMessages = await conversations.initializeHistory()
+  chat.messages.value = historyMessages
+
   await live2d.scanModels()
 
   // Wait for Live2D canvas init before fitting the Electron window.
@@ -251,13 +281,26 @@ onMounted(async () => {
       console.log('[App] Screen info updated:', JSON.stringify(info))
     })
   }
+
+  if (hasElectronApi('onChatStateUpdated')) {
+    getElectronApi().onChatStateUpdated((snapshot) => {
+      if (conversations.applyRemoteSnapshot(snapshot)) {
+        chat.messages.value = conversations.hydrateActiveToChat()
+      }
+    })
+  }
 })
 
 onUnmounted(() => {
+  conversations.saveCurrent(chat.messages.value)
+  conversations.syncSnapshot()
   feishu.stop()
   reminder.clearAll()
   if (hasElectronApi('removeScreenInfoListener')) {
     callElectronApi('removeScreenInfoListener')
+  }
+  if (hasElectronApi('removeChatStateListener')) {
+    callElectronApi('removeChatStateListener')
   }
 })
 </script>
@@ -420,6 +463,17 @@ onUnmounted(() => {
   color: var(--text-secondary);
   border: 1px solid var(--glass-border);
   border-bottom-left-radius: var(--radius-sm);
+}
+
+.token-usage {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--glass-border);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  text-align: right;
+  opacity: 0.85;
 }
 
 .tool-call-indicator {

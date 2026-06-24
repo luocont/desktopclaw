@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from desktopclaw.agent.tools.base import Tool
+from desktopclaw.agent.tools.sandbox import is_within_allowed, normalize_allowed_dirs
 
 
 class ExecTool(Tool):
@@ -20,9 +21,17 @@ class ExecTool(Tool):
         allow_patterns: list[str] | None = None,
         restrict_to_workspace: bool = False,
         path_append: str = "",
+        allowed_paths: list[str] | None = None,
     ):
         self.timeout = timeout
         self.working_dir = working_dir
+        # Permitted roots for command cwd + absolute paths when sandboxed.
+        # The working dir is always treated as an allowed root.
+        self.allowed_dirs = (
+            normalize_allowed_dirs(working_dir, allowed_paths)
+            if restrict_to_workspace
+            else []
+        )
         self.deny_patterns = deny_patterns or [
             r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
             r"\bdel\s+/[fq]\b",              # del /f, del /q
@@ -80,6 +89,18 @@ class ExecTool(Tool):
         timeout: int | None = None, **kwargs: Any,
     ) -> str:
         cwd = working_dir or self.working_dir or os.getcwd()
+
+        # When sandboxed, a caller-supplied working_dir must stay inside an
+        # allowed root — otherwise the agent could escape by running relative
+        # commands from an arbitrary cwd.
+        if self.restrict_to_workspace and working_dir:
+            try:
+                resolved_cwd = Path(working_dir).expanduser().resolve()
+            except Exception:
+                return "Error: Command blocked by safety guard (invalid working_dir)"
+            if not is_within_allowed(resolved_cwd, self.allowed_dirs):
+                return "Error: Command blocked by safety guard (working_dir outside allowed directories)"
+
         guard_error = self._guard_command(command, cwd)
         if guard_error:
             return guard_error
@@ -158,7 +179,11 @@ class ExecTool(Tool):
             if "..\\" in cmd or "../" in cmd:
                 return "Error: Command blocked by safety guard (path traversal detected)"
 
+            # Allowed roots = workspace + whitelist + the (already validated) cwd.
             cwd_path = Path(cwd).resolve()
+            allowed_dirs = list(self.allowed_dirs)
+            if cwd_path not in allowed_dirs:
+                allowed_dirs.append(cwd_path)
 
             for raw in self._extract_absolute_paths(cmd):
                 try:
@@ -166,8 +191,8 @@ class ExecTool(Tool):
                     p = Path(expanded).expanduser().resolve()
                 except Exception:
                     continue
-                if p.is_absolute() and cwd_path not in p.parents and p != cwd_path:
-                    return "Error: Command blocked by safety guard (path outside working dir)"
+                if p.is_absolute() and not is_within_allowed(p, allowed_dirs):
+                    return "Error: Command blocked by safety guard (path outside allowed directories)"
 
         return None
 

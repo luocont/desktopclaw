@@ -1,151 +1,20 @@
-"""Memory system for persistent agent memory."""
+"""Token-driven user memory consolidation."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import weakref
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
-from desktopclaw.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
+from desktopclaw.agent.memory.store import MemoryStore
+from desktopclaw.utils.helpers import estimate_message_tokens, estimate_prompt_tokens_chain
 
 if TYPE_CHECKING:
     from desktopclaw.providers.base import LLMProvider
     from desktopclaw.session.manager import Session, SessionManager
-
-
-_SAVE_MEMORY_TOOL = [
-    {
-        "type": "function",
-        "function": {
-            "name": "save_memory",
-            "description": "Save the memory consolidation result to persistent storage.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "history_entry": {
-                        "type": "string",
-                        "description": "A paragraph summarizing key events/decisions/topics. "
-                        "Start with [YYYY-MM-DD HH:MM]. Include detail useful for grep search.",
-                    },
-                    "memory_update": {
-                        "type": "string",
-                        "description": "Full updated long-term memory as markdown. Include all existing "
-                        "facts plus new ones. Return unchanged if nothing new.",
-                    },
-                },
-                "required": ["history_entry", "memory_update"],
-            },
-        },
-    }
-]
-
-
-def _ensure_text(value: Any) -> str:
-    """Normalize tool-call payload values to text for file storage."""
-    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-
-
-def _normalize_save_memory_args(args: Any) -> dict[str, Any] | None:
-    """Normalize provider tool-call arguments to the expected dict shape."""
-    if isinstance(args, str):
-        args = json.loads(args)
-    if isinstance(args, list):
-        return args[0] if args and isinstance(args[0], dict) else None
-    return args if isinstance(args, dict) else None
-
-class MemoryStore:
-    """Two-layer memory: MEMORY.md (long-term facts) + HISTORY.md (grep-searchable log)."""
-
-    def __init__(self, workspace: Path):
-        self.memory_dir = ensure_dir(workspace / "memory")
-        self.memory_file = self.memory_dir / "MEMORY.md"
-        self.history_file = self.memory_dir / "HISTORY.md"
-
-    def read_long_term(self) -> str:
-        if self.memory_file.exists():
-            return self.memory_file.read_text(encoding="utf-8")
-        return ""
-
-    def write_long_term(self, content: str) -> None:
-        self.memory_file.write_text(content, encoding="utf-8")
-
-    def append_history(self, entry: str) -> None:
-        with open(self.history_file, "a", encoding="utf-8") as f:
-            f.write(entry.rstrip() + "\n\n")
-
-    def get_memory_context(self) -> str:
-        long_term = self.read_long_term()
-        return f"## Long-term Memory\n{long_term}" if long_term else ""
-
-    @staticmethod
-    def _format_messages(messages: list[dict]) -> str:
-        lines = []
-        for message in messages:
-            if not message.get("content"):
-                continue
-            tools = f" [tools: {', '.join(message['tools_used'])}]" if message.get("tools_used") else ""
-            lines.append(
-                f"[{message.get('timestamp', '?')[:16]}] {message['role'].upper()}{tools}: {message['content']}"
-            )
-        return "\n".join(lines)
-
-    async def consolidate(
-        self,
-        messages: list[dict],
-        provider: LLMProvider,
-        model: str,
-    ) -> bool:
-        """Consolidate the provided message chunk into MEMORY.md + HISTORY.md."""
-        if not messages:
-            return True
-
-        current_memory = self.read_long_term()
-        prompt = f"""Process this conversation and call the save_memory tool with your consolidation.
-
-## Current Long-term Memory
-{current_memory or "(empty)"}
-
-## Conversation to Process
-{self._format_messages(messages)}"""
-
-        chat_messages = [
-            {"role": "system", "content": "You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation."},
-            {"role": "user", "content": prompt},
-        ]
-
-        try:
-            response = await provider.chat_with_retry(
-                messages=chat_messages,
-                tools=_SAVE_MEMORY_TOOL,
-                model=model,
-                tool_choice={"type": "function", "function": {"name": "save_memory"}},
-            )
-
-            if not response.has_tool_calls:
-                logger.warning("Memory consolidation: LLM did not call save_memory, skipping")
-                return False
-
-            args = _normalize_save_memory_args(response.tool_calls[0].arguments)
-            if args is None:
-                logger.warning("Memory consolidation: unexpected save_memory arguments")
-                return False
-
-            if entry := args.get("history_entry"):
-                self.append_history(_ensure_text(entry))
-            if update := args.get("memory_update"):
-                update = _ensure_text(update)
-                if update != current_memory:
-                    self.write_long_term(update)
-
-            logger.info("Memory consolidation done for {} messages", len(messages))
-            return True
-        except Exception:
-            logger.exception("Memory consolidation failed")
-            return False
 
 
 class MemoryConsolidator:

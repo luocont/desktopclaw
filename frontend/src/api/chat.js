@@ -65,5 +65,6 @@ function buildChatBody(message, options = {}) {
   if (options.baseUrl) out.baseUrl = options.baseUrl
   if (options.personality) out.personality = options.personality
   if (options.customPrompt) out.customPrompt = options.customPrompt
+  if (options.sessionKey) out.sessionKey = options.sessionKey
   return out
 }

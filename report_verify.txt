@@ -1,0 +1,191 @@
+paragraphs: 202, tables: 0
+
+  1 [Normal] 嘉应学院
+  2 [Normal] 计算机学院实验报告
+  7 [Normal] 题    目：           DesktopClaw桌面AI智能助手系统
+  8 [Normal] 班    级：              第X组
+  9 [Normal] 组    别：            第X组XXX
+ 10 [Normal] 学    院：          计 算 机 学 院
+ 11 [Normal] 专    业：          DesktopClaw桌面AI智能助手系统XXXX
+ 12 [Normal] 指导老师：            XXX、XXX
+ 18 [Normal] 嘉应学院
+ 21 [Normal] 目  录
+ 22 [Normal] 1 绪论	1
+ 23 [Normal] 1.1 目标软件系统开发的目的和意义	1
+ 24 [Normal] 1.2 开发工具及相关技术介绍	1
+ 25 [Normal] 2 可行性分析	2
+ 26 [Normal] 2.1 技术可行性	2
+ 27 [Normal] 2.2 经济可行性	2
+ 28 [Normal] 2.3 操作可行性	2
+ 29 [Normal] 3 需求分析	3
+ 30 [Normal] 3.1 功能需求	3
+ 31 [Normal] 3.2 性能需求	3
+ 32 [Normal] 3.3 软件开发约束需求	3
+ 33 [Normal] 3.4 软件质量要求	3
+ 34 [Normal] 4 体系结构设计	4
+ 35 [Normal] 4.1 软件设计目标和原则	4
+ 36 [Normal] 4.2 逻辑视点的体系结构设计	4
+ 37 [Normal] 4.3 部署视点的体系结构设计	4
+ 38 [Normal] 4.4 开发视点的体系结构设计	4
+ 39 [Normal] 4.5 运行视点的体系结构设计	4
+ 40 [Normal] 5 软件详细设计	5
+ 41 [Normal] 5.1 用户界面设计	5
+ 42 [Normal] 5.2 用例设计	5
+ 43 [Normal] 5.3 类设计	5
+ 44 [Normal] 5.4 数据设计	5
+ 45 [Normal] 6 编码实现	6
+ 46 [Normal] 6.1 相关技术介绍	6
+ 47 [Normal] 6.2 模块说明	6
+ 48 [Normal] 7 软件测试	7
+ 49 [Normal] 7.1 单元测试	7
+ 50 [Normal] 7.2 集成测试	7
+ 51 [Normal] 7.3 确认测试	7
+ 52 [Normal] 7.4 缺陷汇总	7
+ 53 [Normal] 8 总结	8
+ 54 [Normal] 9 附录	8
+ 56 [Heading 1] 1 绪论
+ 57 [Heading 2] 1.1 目标软件系统开发的目的和意义
+ 58 [Body Text] 随着大语言模型（LLM）技术的快速发展，个人用户对本地化、可定制、可扩展的 AI 助手需求日益增长。传统在线聊天机器人难以满足桌面常驻、多渠道接入、工具调用与长期记忆等复合场景。DesktopClaw
+ 59 [Body Text] 本系统的开发目的包括：（1）提供基于 Electron + Vue 3 的桌面交互界面，支持 Live2D 虚拟形象与独立聊天窗口；（2）构建 Python 异步后端，实现流式对话、工具调用、子代理调
+ 60 [Heading 2] 1.2 开发工具及相关技术介绍
+ 61 [Body Text] 本项目采用前后端分离的全栈架构，主要开发工具与技术如下：
+ 62 [List Paragraph] 后端：Python 3.11+、asyncio HTTP 服务、Pydantic 配置校验、LiteLLM 多模型调用；
+ 63 [List Paragraph] 前端：Vue 3、Vite、Electron 28、PIXI.js + Live2D Display 桌面宠物渲染；
+ 64 [List Paragraph] 通信：HTTP REST、SSE 流式推送、Electron IPC、WebSocket（Bridge 层）；
+ 65 [List Paragraph] AI：AgentLoop 引擎、ToolRegistry 工具注册、MCP 协议、Skills 技能系统；
+ 66 [List Paragraph] 记忆：sentence-transformers 本地嵌入、SQLite 图存储、Reasoning Bank 策略库；
+ 67 [List Paragraph] 测试：pytest + pytest-asyncio（48 个测试文件）、Ruff、electron-builder。
+ 68 [Heading 1] 2 可行性分析
+ 69 [Heading 2] 2.1 技术可行性
+ 70 [Body Text] 项目技术选型成熟可靠。Python 生态在 AI Agent 领域已有丰富实践，Vue 3 + Electron 是桌面应用主流方案。后端 AgentLoop 采用 asyncio 消息总线解耦渠道与
+ 71 [Heading 2] 2.2 经济可行性
+ 72 [Body Text] 系统基于 MIT 开源协议，核心依赖均为开源组件。LLM 调用按用量计费，用户可自选提供商；本地嵌入模型可选安装以降低 API 成本。部署仅需本机运行，无需专用服务器，开发与运维成本可控。
+ 73 [Heading 2] 2.3 操作可行性
+ 74 [Body Text] 用户通过 desktopclaw gateway 启动后端，npm run electron:dev 启动前端，操作流程简单。设置界面支持 Provider、模型、人格等可视化配置；聊天界面支持多会话
+ 75 [Heading 1] 3 需求分析
+ 76 [Heading 2] 3.1 功能需求
+ 77 [Body Text] 根据项目实现，系统功能需求归纳如下：
+ 78 [List Paragraph] 桌面宠物：Live2D 形象、窗口拖拽缩放、鼠标穿透、控制按钮；
+ 79 [List Paragraph] 聊天对话：POST /chat 与 SSE /chat/stream，多轮上下文与工具调用展示；
+ 80 [List Paragraph] 会话管理：会话列表 CRUD、历史消息加载；
+ 81 [List Paragraph] 记忆管理：用户事实与 Agent 策略双域存储及 API 查询；
+ 82 [List Paragraph] 设置配置：LLM Provider、API Key、模型与人格模板；
+ 83 [List Paragraph] 工具能力：文件读写、Shell、深度网络研究、定时任务、子代理；
+ 84 [List Paragraph] 多渠道：Telegram、飞书、钉钉、Discord、Slack、QQ、微信、Email、Matrix、WhatsApp 等；
+ 85 [List Paragraph] 媒体处理：音频上传与媒体文件访问。
+ 86 [Heading 2] 3.2 性能需求
+ 87 [List Paragraph] 流式响应：SSE 首 token 延迟取决于 LLM 提供商，目标低于 3 秒；
+ 88 [List Paragraph] 上下文窗口：默认 65536 tokens，超长会话触发记忆归档；
+ 89 [List Paragraph] 并发处理：asyncio 异步 I/O，消息总线队列化处理；
+ 90 [List Paragraph] 深度研究：deep_web_search 默认超时 120 秒，可配置并发与页数；
+ 91 [List Paragraph] 记忆检索：向量 + 图遍历混合，索引由 MemoryIndexWorker 异步维护。
+ 92 [Heading 2] 3.3 软件开发约束需求
+ 93 [List Paragraph] 运行环境：Windows 10+，Python ≥ 3.11，Node.js 用于前端构建；
+ 94 [List Paragraph] 本地绑定：API 默认监听 127.0.0.1:3000；
+ 95 [List Paragraph] 安全约束：Shell 受 ExecToolConfig 限制，文件操作可 restrict_to_workspace；
+ 96 [List Paragraph] 配置管理：Pydantic Schema 统一校验；
+ 97 [List Paragraph] 依赖可选：memory、web-search 等通过 extras 安装。
+ 98 [Heading 2] 3.4 软件质量要求
+ 99 [List Paragraph] 可维护性：模块化目录，各渠道继承 BaseChannel；
+100 [List Paragraph] 可测试性：pytest 覆盖 Agent、记忆、渠道、API 等 48 个模块；
+101 [List Paragraph] 可扩展性：ToolRegistry 插件、Skills 热加载、MCP 动态接入；
+102 [List Paragraph] 安全性：DOMPurify 防 XSS、路径穿越防护、allow_from 白名单；
+103 [List Paragraph] 可用性：/health 健康检查、友好错误提示、Usage 令牌追踪。
+104 [Heading 1] 4 体系结构设计
+105 [Heading 2] 4.1 软件设计目标和原则
+106 [Body Text] 设计目标：构建高内聚、低耦合的桌面 AI 助手平台，使前端交互、消息路由、Agent 推理、工具执行各层可独立演进。原则包括单一职责、依赖倒置（BaseChannel/LLMProvider 抽象）、
+107 [Heading 2] 4.2 逻辑视点的体系结构设计
+108 [Body Text] 系统逻辑分层如下：
+109 [List Paragraph] 表示层：App.vue（桌面宠物）、ChatApp.vue（聊天界面）、SettingsPage/MemoryPage；
+110 [List Paragraph] 通信层：Electron IPC、axios/fetch、SSE 流解析；
+111 [List Paragraph] 应用层：APIServer、SessionManager、ChannelManager；
+112 [List Paragraph] 领域层：AgentLoop、ContextBuilder、MemoryConsolidator；
+113 [List Paragraph] 基础设施层：LLMProvider、ToolRegistry、MessageBus、本地存储。
+114 [Body Text] 核心数据流：用户消息 → APIServer → MessageBus → AgentLoop → LLM + Tools → SSE/OutboundMessage → 前端渲染。
+115 [Heading 2] 4.3 部署视点的体系结构设计
+116 [List Paragraph] 进程 1：Python Gateway（desktopclaw gateway --port 3000）；
+117 [List Paragraph] 进程 2：Electron 主进程 + Vue 渲染进程；
+118 [List Paragraph] 进程 3（可选）：Node.js Bridge WebSocket，用于 WhatsApp 等协议；
+119 [List Paragraph] 存储：workspace/ 目录（配置、会话、memory/、skills/、媒体）。
+120 [Heading 2] 4.4 开发视点的体系结构设计
+121 [List Paragraph] backend/desktopclaw/agent/：引擎、工具、记忆、子代理；
+122 [List Paragraph] backend/desktopclaw/api/：HTTP 服务与辅助模块；
+123 [List Paragraph] backend/desktopclaw/channels/：渠道适配器；
+124 [List Paragraph] backend/desktopclaw/bus/：消息事件与总线；
+125 [List Paragraph] frontend/src/：Vue 组件、stores、api 客户端；
+126 [List Paragraph] backend/tests/：自动化测试。
+127 [Heading 2] 4.5 运行视点的体系结构设计
+128 [Body Text] 运行时 AgentLoop 监听 MessageBus；APIServer 以 asyncio Stream 处理 HTTP；各 Channel 以后台任务连接外部平台。记忆系统在会话间隙触发检索，M
+129 [Heading 1] 5 软件详细设计
+130 [Heading 2] 5.1 用户界面设计
+131 [Body Text] 系统提供两套 UI 模式：
+132 [List Paragraph] 桌面宠物模式（App.vue）：Live2DStage、ControlButtons，支持拖拽、缩放、穿透切换；
+133 [List Paragraph] 聊天模式（ChatApp.vue）：ChatSidebar + ChatMain + ChatComposer，含设置与记忆页；
+134 [List Paragraph] MessageBubble：Markdown（marked + DOMPurify）、工具调用、思考过程、TTS。
+135 [Heading 2] 5.2 用例设计
+136 [List Paragraph] UC-01 发起对话：ChatComposer → useChat.send() → /chat/stream → 流式显示；
+137 [List Paragraph] UC-02 管理会话：侧边栏新建/切换/删除，调用 /sessions API；
+138 [List Paragraph] UC-03 配置模型：ModelPicker 选择 Provider，写入 /settings；
+139 [List Paragraph] UC-04 查看记忆：MemoryPage 调用 /memory；
+140 [List Paragraph] UC-05 渠道消息：外部平台 → Channel → Bus → AgentLoop → 回复；
+141 [List Paragraph] UC-06 深度研究：deep_web_search 多轮检索 + 深读 + 交叉验证。
+142 [Heading 2] 5.3 类设计
+143 [List Paragraph] AgentLoop：协调 ContextBuilder、ToolRegistry、MemoryConsolidator；
+144 [List Paragraph] APIServer：HTTP 路由、SSE、CORS、Feishu 事件；
+145 [List Paragraph] BaseChannel：connect/send 抽象，子类实现各平台；
+146 [List Paragraph] ChannelManager：渠道生命周期与入站路由；
+147 [List Paragraph] MessageBus：asyncio.Queue 生产者-消费者；
+148 [List Paragraph] MemoryStore/ReasoningBankStore/MemoryGraphStore：双域记忆存储；
+149 [List Paragraph] MRAgentRetriever：向量 + 图混合检索；
+150 [List Paragraph] LLMProvider：LiteLLM 封装、流式、重试、usage。
+151 [Heading 2] 5.4 数据设计
+152 [List Paragraph] 会话：sessions.json + 各会话消息 JSON；
+153 [List Paragraph] 配置：config.json（DesktopclawConfig）；
+154 [List Paragraph] 用户事实：memory/MEMORY.md、memory/HISTORY.md；
+155 [List Paragraph] Agent 策略：reasoning_bank.json、graph.db；
+156 [List Paragraph] 向量索引：LocalEmbedder + MemoryIndexWorker；
+157 [List Paragraph] Skills：skills/{name}/SKILL.md。
+158 [Heading 1] 6 编码实现
+159 [Heading 2] 6.1 相关技术介绍
+160 [List Paragraph] LiteLLM：统一多厂商 API，支持流式 completion 与 tool_calls；
+161 [List Paragraph] asyncio Stream Server：轻量 HTTP，无需额外 Web 框架；
+162 [List Paragraph] Vue 3 Composition API：useChat、useConversations 管理状态；
+163 [List Paragraph] SSE：/chat/stream 推送 token、tool_call、complete 事件；
+164 [List Paragraph] Playwright：deep_web_search 无头 Chromium 检索；
+165 [List Paragraph] sentence-transformers：可选本地嵌入。
+166 [Heading 2] 6.2 模块说明
+167 [List Paragraph] agent/loop.py：消息→上下文→LLM→工具循环，最大 40 次迭代；
+168 [List Paragraph] api/server.py：/chat、/settings、/memory、/sessions 等路由；
+169 [List Paragraph] agent/memory/：检索、蒸馏、整合、索引；
+170 [List Paragraph] agent/tools/：filesystem、shell、deep_web_search、cron、spawn；
+171 [List Paragraph] channels/manager.py：按配置启用渠道；
+172 [List Paragraph] frontend/stores/useChat.js：流式解析与错误处理。
+173 [Heading 1] 7 软件测试
+174 [Heading 2] 7.1 单元测试
+175 [Body Text] backend/tests/ 含 48 个测试文件，覆盖 Agent 循环、记忆图、推理库、渠道适配、工具校验、配置迁移、嵌入模型等模块，使用 pytest + pytest-asyncio 执行。
+176 [Heading 2] 7.2 集成测试
+177 [Body Text] test_memory_integration 验证记忆全流程；test_session_api、test_memory_api、test_settings_api 测试 HTTP 端到端；test_
+178 [Heading 2] 7.3 确认测试
+179 [Body Text] 从用户场景验证：桌面宠物启动、聊天窗口切换、流式对话、多会话、设置重载、记忆展示。安全测试报告对 XSS、路径穿越、Shell 策略等进行审查，执行 246 个用例。
+180 [Heading 2] 7.4 缺陷汇总
+181 [List Paragraph] 【严重】ASR API Key 硬编码 → 建议改为用户配置；
+182 [List Paragraph] 【建议】API Key 存 localStorage 有 XSS 风险 → 建议 safeStorage；
+183 [List Paragraph] 【已修复】气泡鼠标穿透导致无法点击；
+184 [List Paragraph] 【待优化】深度研究可能触发 Bing 验证码。
+185 [Heading 1] 8 总结
+186 [Body Text] DesktopClaw 成功实现桌面 AI 智能助手，涵盖桌面宠物、流式对话、双域记忆、多工具 Agent 与多渠道接入。系统采用前后端分离与事件驱动架构，测试覆盖完善。后续可在安全加固、性能优化与一
+187 [Heading 1] 9 附录
+188 [Heading 2] 9.1 主要 API 接口
+189 [List Paragraph] GET  /health — 健康检查
+190 [List Paragraph] POST /chat — 标准对话
+191 [List Paragraph] GET  /chat/stream — SSE 流式对话
+192 [List Paragraph] GET/POST /settings — 配置读写
+193 [List Paragraph] GET  /memory — 记忆查询
+194 [List Paragraph] GET  /sessions — 会话列表
+195 [List Paragraph] GET  /sessions/{id}/messages — 会话消息
+196 [List Paragraph] POST /audio/upload — 音频上传
+197 [Heading 2] 9.2 项目目录结构
+198 [List Paragraph] backend/desktopclaw/ — Python 后端
+199 [List Paragraph] frontend/src/ — Vue 3 前端
+200 [List Paragraph] backend/tests/ — 自动化测试
+201 [List Paragraph] readme.md — 通信架构文档

@@ -1,146 +1,330 @@
 <template>
+
   <transition name="picker-fade" @after-enter="onOpened">
+
     <div v-if="visible" ref="panelEl" class="settings-panel glass-card" @click.stop>
+
       <div class="picker-header">
+
         <span>设置</span>
+
         <button class="picker-close" @click="$emit('close')" aria-label="关闭设置">
+
           <X :size="14" />
+
         </button>
+
       </div>
-      <div class="settings-form">
-        <!-- Bug #6: previously users were confused because edits took
-             effect immediately (chatOptions is a computed ref) while the
-             "保存" button only persisted to disk. Spell that out. -->
-        <p class="settings-hint">
-          修改即时生效；保存按钮用于持久化到本地和后端。
-        </p>
-        <div class="settings-field">
-          <label class="settings-label">API Base URL（LLM接口地址）</label>
-          <input
-            v-model="settings.baseUrl.value"
-            type="text"
-            class="settings-input"
-            placeholder="留空使用默认值"
-          />
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">API Key</label>
-          <input
-            v-model="settings.apiKey.value"
-            type="password"
-            class="settings-input"
-            placeholder="sk-..."
-          />
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">主模型</label>
-          <input
-            v-model="settings.modelId.value"
-            type="text"
-            class="settings-input"
-            placeholder="deepseek-chat"
-          />
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">快速模型</label>
-          <input
-            v-model="settings.fastModelId.value"
-            type="text"
-            class="settings-input"
-            placeholder="gpt-4o-mini"
-          />
-          <p class="settings-hint">用于深度调研单页摘要，留空则使用主模型</p>
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">角色性格</label>
-          <div class="personality-options">
-            <button
-              v-for="opt in personalityOptions"
-              :key="opt.value"
-              :class="['personality-btn', { active: settings.personality.value === opt.value }]"
-              @click="settings.personality.value = opt.value"
-              :title="opt.description"
-            >
-              {{ opt.label }}
-            </button>
-          </div>
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">生日</label>
-          <input v-model="settings.birthday.value" type="date" class="settings-input" />
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">自定义提示词</label>
-          <textarea
-            v-model="settings.customPrompt.value"
-            class="settings-textarea"
-            placeholder="留空则使用默认提示词"
-            rows="4"
-          />
-        </div>
-        <button class="settings-save-btn" @click="onSave" :disabled="settings.isSyncing.value">
-          {{ settings.isSyncing.value ? '保存中...' : '保存设置' }}
-        </button>
-        <div v-if="saveStatus" class="settings-status" :class="{ error: saveError }">
-          {{ saveStatus }}
-        </div>
-      </div>
+
+      <SettingsForm
+
+        :show-memory-button="false"
+
+        :show-switch-to-chat="true"
+
+        @switch-to-chat="$emit('close')"
+
+      />
+
     </div>
+
   </transition>
+
 </template>
 
+
+
 <script setup>
+
 import { ref } from 'vue'
+
 import { X } from 'lucide-vue-next'
-import { useSettings } from '../stores/useSettings.js'
-import { personalityOptions } from '../data/personalities.js'
+
+import SettingsForm from './settings/SettingsForm.vue'
+
+
 
 defineProps({
+
   visible: { type: Boolean, default: false },
+
 })
+
 const emit = defineEmits(['close', 'opened'])
 
-const settings = useSettings()
+
+
 const panelEl = ref(null)
-const saveStatus = ref('')
-const saveError = ref(false)
+
+
 
 defineExpose({ panelEl })
 
+
+
 function onOpened() {
+
   emit('opened')
+
 }
 
-async function onSave() {
-  saveStatus.value = ''
-  saveError.value = false
-  const ok = await settings.save()
-  if (ok) {
-    saveStatus.value = '已保存（前后端同步）'
-    // Bug #20: previously the panel auto-closed 600ms after save,
-    // ripping the form out from under users who wanted to continue
-    // editing the next field. The user can dismiss with the X button.
-  } else {
-    saveError.value = true
-    const detail = settings.lastSyncError.value
-    saveStatus.value = detail
-      ? `同步失败：${detail}`
-      : '已写入本地，但同步到后端失败（请确认 desktopclaw api 已启动）'
-  }
-}
 </script>
 
+
+
 <style scoped>
-.settings-status {
-  margin-top: 6px;
-  font-size: var(--font-size-xs);
-  color: var(--text-muted);
+
+.settings-panel :deep(.settings-form) {
+
+  padding: var(--space-md);
+
+  display: flex;
+
+  flex-direction: column;
+
+  gap: var(--space-md);
+
+  flex: 1;
+
+  min-height: 0;
+
+  overflow-y: auto;
+
+  background: var(--bg-secondary);
+
 }
-.settings-status.error { color: var(--error); }
-.settings-hint {
+
+
+
+.settings-panel :deep(.settings-page-field) {
+
+  display: flex;
+
+  flex-direction: column;
+
+  gap: 6px;
+
+}
+
+
+
+.settings-panel :deep(.settings-page-label) {
+
+  font-size: var(--font-size-sm);
+
+  font-weight: 600;
+
+  color: var(--text-secondary);
+
+}
+
+
+
+.settings-panel :deep(.settings-page-hint) {
+
   font-size: var(--font-size-xs);
+
   color: var(--text-muted);
+
+  margin: 0;
+
   line-height: 1.4;
-  padding: 4px 0 2px;
+
 }
+
+
+
+.settings-panel :deep(.settings-page-input),
+
+.settings-panel :deep(.settings-page-textarea) {
+
+  padding: 8px 12px;
+
+  border: 1px solid var(--glass-border);
+
+  border-radius: var(--radius-md);
+
+  background: var(--glass-bg);
+
+  color: var(--text-primary);
+
+  font-size: var(--font-size-sm);
+
+  font-family: inherit;
+
+  outline: none;
+
+  transition: border-color 0.2s ease;
+
+}
+
+
+
+.settings-panel :deep(.settings-page-textarea) {
+
+  resize: vertical;
+
+}
+
+
+
+.settings-panel :deep(.settings-page-input:focus),
+
+.settings-panel :deep(.settings-page-textarea:focus) {
+
+  border-color: var(--accent-amber);
+
+}
+
+
+
+.settings-panel :deep(.settings-page-personality) {
+
+  display: flex;
+
+  gap: var(--space-sm);
+
+}
+
+
+
+.settings-panel :deep(.settings-page-personality-btn) {
+
+  flex: 1;
+
+  padding: 8px 12px;
+
+  border: 1px solid var(--glass-border);
+
+  border-radius: var(--radius-md);
+
+  background: var(--glass-bg);
+
+  color: var(--text-secondary);
+
+  font-size: var(--font-size-sm);
+
+  font-weight: 500;
+
+  cursor: pointer;
+
+  transition: all var(--transition-fast);
+
+}
+
+
+
+.settings-panel :deep(.settings-page-personality-btn:hover) {
+
+  background: var(--glass-bg-strong);
+
+  border-color: var(--accent-amber);
+
+}
+
+
+
+.settings-panel :deep(.settings-page-personality-btn.active) {
+
+  background: var(--accent-amber);
+
+  color: white;
+
+  border-color: var(--accent-amber);
+
+}
+
+
+
+.settings-panel :deep(.settings-page-secondary-btn) {
+
+  padding: 8px 16px;
+
+  background: transparent;
+
+  color: var(--text-secondary);
+
+  border: 1px solid var(--glass-border);
+
+  border-radius: var(--radius-md);
+
+  font-size: var(--font-size-sm);
+
+  cursor: pointer;
+
+  transition: background 0.2s ease;
+
+}
+
+
+
+.settings-panel :deep(.settings-page-secondary-btn:hover) {
+
+  background: var(--glass-bg-strong);
+
+}
+
+
+
+.settings-panel :deep(.settings-page-save-btn) {
+
+  padding: 8px 16px;
+
+  background: var(--accent-amber);
+
+  color: white;
+
+  border: none;
+
+  border-radius: var(--radius-md);
+
+  font-size: var(--font-size-sm);
+
+  font-weight: 600;
+
+  cursor: pointer;
+
+  transition: opacity 0.2s ease;
+
+}
+
+
+
+.settings-panel :deep(.settings-page-save-btn:hover) {
+
+  opacity: 0.85;
+
+}
+
+
+
+.settings-panel :deep(.settings-page-save-btn:disabled) {
+
+  opacity: 0.5;
+
+  cursor: not-allowed;
+
+}
+
+
+
+.settings-panel :deep(.settings-page-status) {
+
+  margin-top: 6px;
+
+  font-size: var(--font-size-xs);
+
+  color: var(--text-muted);
+
+}
+
+
+
+.settings-panel :deep(.settings-page-status.error) {
+
+  color: var(--error);
+
+}
+
 </style>
+

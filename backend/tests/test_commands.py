@@ -210,7 +210,12 @@ def mock_agent_runtime(tmp_path):
 
         agent_loop = MagicMock()
         agent_loop.channels_config = None
-        agent_loop.process_direct = AsyncMock(return_value="mock-response")
+        agent_loop.process_direct = AsyncMock(
+            return_value=__import__("desktopclaw.agent.loop", fromlist=["ProcessResult"]).ProcessResult(
+                content="mock-response",
+                usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "breakdown": {}},
+            )
+        )
         agent_loop.close_mcp = AsyncMock(return_value=None)
         mock_agent_loop_cls.return_value = agent_loop
 
@@ -282,8 +287,9 @@ def test_agent_config_sets_active_path(monkeypatch, tmp_path: Path) -> None:
         def __init__(self, *args, **kwargs) -> None:
             pass
 
-        async def process_direct(self, *_args, **_kwargs) -> str:
-            return "ok"
+        async def process_direct(self, *_args, **_kwargs):
+            from desktopclaw.agent.loop import ProcessResult
+            return ProcessResult(content="ok", usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "breakdown": {}})
 
         async def close_mcp(self) -> None:
             return None

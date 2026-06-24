@@ -8,12 +8,46 @@ from typing import Any
 from urllib.parse import unquote
 
 from desktopclaw.bus.events import InboundMessage
+from desktopclaw.agent.loop import ProcessResult
 from desktopclaw.config.loader import load_config, save_config
 from desktopclaw.config.paths import get_media_dir
+from desktopclaw.utils.usage import empty_usage_dict
+from desktopclaw.api.session_helpers import session_info_dict, session_messages_for_ui
+from desktopclaw.api.memory_helpers import build_memory_payload
 
 
 class APIServer:
-    """Simple HTTP API server for handling frontend requests."""
+    """HTTP API server for chat, settings, and media."""
+
+    @staticmethod
+    def _build_complete_event(result: ProcessResult | str | None) -> dict[str, Any]:
+        if isinstance(result, ProcessResult):
+            event: dict[str, Any] = {
+                'type': 'complete',
+                'response': result.content,
+                'usage': result.usage or empty_usage_dict(),
+                'success': result.error is None,
+            }
+            if result.error:
+                event['error'] = result.error
+            if result.blocks:
+                event['blocks'] = result.blocks
+            return event
+        text = str(result) if result is not None else ''
+        is_err = bool(text) and (
+            text.startswith('Error')
+            or '超时' in text
+            or 'Authentication Fails' in text
+        )
+        event = {
+            'type': 'complete',
+            'response': text,
+            'usage': empty_usage_dict(),
+            'success': not is_err,
+        }
+        if is_err:
+            event['error'] = text
+        return event
 
     def __init__(self, agent, bus, port: int = 3000):
         self.agent = agent
@@ -98,6 +132,26 @@ class APIServer:
                 return
             if method == 'POST' and path == '/settings':
                 await self._handle_set_settings(reader, writer, headers)
+                return
+
+            if method == 'GET' and path == '/memory':
+                await self._handle_get_memory(writer)
+                return
+            if method == 'POST' and path == '/memory/retry-embedding':
+                await self._handle_retry_embedding(writer)
+                return
+
+            # Handle session list / messages for frontend history sync
+            if method == 'GET' and path == '/sessions':
+                await self._handle_list_sessions(writer)
+                return
+            if method == 'GET' and path.startswith('/sessions/') and path.endswith('/messages'):
+                session_key = unquote(path[len('/sessions/'):-len('/messages')])
+                await self._handle_get_session_messages(writer, session_key)
+                return
+            if method == 'DELETE' and path.startswith('/sessions/') and not path.endswith('/messages'):
+                session_key = unquote(path[len('/sessions/'):])
+                await self._handle_delete_session(writer, session_key)
                 return
 
             # Handle media files
@@ -206,10 +260,7 @@ class APIServer:
             final_response[0] = "请求超时，请稍后重试。(请求处理时间超过10分钟)"
 
         # Send final response event
-        final_event = {
-            'type': 'complete',
-            'response': final_response[0]
-        }
+        final_event = self._build_complete_event(final_response[0])
         event_data = f"data: {json.dumps(final_event, ensure_ascii=False)}\n\n"
         try:
             writer.write(event_data.encode())
@@ -355,24 +406,27 @@ class APIServer:
                 print(f"[API] Audio transcription: {transcription}")
                 
                 response_text = await self.agent.process_direct(transcription, channel)
-                
+                response_content = response_text.content if isinstance(response_text, ProcessResult) else response_text
+                response_usage = response_text.usage if isinstance(response_text, ProcessResult) else empty_usage_dict()
+
                 tts_audio_path = None
-                if response_text:
-                    tts_audio_path = await self._synthesize_speech(response_text)
+                if response_content:
+                    tts_audio_path = await self._synthesize_speech(response_content)
                     
                     # Also send TTS audio to Feishu if enabled
                     if tts_audio_path and self.channel_manager:
                         feishu_channel = self.channel_manager.channels.get("feishu")
                         if feishu_channel and hasattr(feishu_channel, '_synthesize_speech'):
                             try:
-                                await feishu_channel._send_tts_to_feishu(response_text, tts_audio_path)
+                                await feishu_channel._send_tts_to_feishu(response_content, tts_audio_path)
                             except Exception as e:
                                 print(f"[API] Failed to send TTS to Feishu: {e}")
                 
                 result = {
                     'success': True,
                     'transcription': transcription,
-                    'response': response_text,
+                    'response': response_content,
+                    'usage': response_usage,
                     'ttsAudio': tts_audio_path,
                 }
             else:
@@ -791,14 +845,165 @@ class APIServer:
         api_base = data.get('baseUrl')
         personality = data.get('personality')
         custom_prompt = data.get('customPrompt')
-        print(f"[API] Processing message: {message[:50]}... (channel={channel}, model={model_id}, api_base={api_base})")
+        session_key = data.get('sessionKey') or f"api:frontend:{channel}"
+        print(f"[API] Processing message: {message[:50]}... (channel={channel}, session={session_key}, model={model_id}, api_base={api_base})")
 
         if wants_streaming:
-            await self._send_streaming_response(writer, message, channel, model_id, api_key, api_base, personality, custom_prompt)
+            await self._send_streaming_response(
+                writer, message, channel, model_id, api_key, api_base, personality, custom_prompt, session_key,
+            )
         else:
-            await self._send_standard_response(writer, message, channel, model_id, api_key, api_base, personality, custom_prompt)
+            await self._send_standard_response(
+                writer, message, channel, model_id, api_key, api_base, personality, custom_prompt, session_key,
+            )
 
-    async def _send_streaming_response(self, writer, message, channel='api', model_id=None, api_key=None, api_base=None, personality=None, custom_prompt=None):
+    @staticmethod
+    def _resolve_session_key(channel: str = 'api', session_key: str | None = None) -> str:
+        if session_key:
+            return session_key
+        return f"api:frontend:{channel}"
+
+    def _get_memory_embedder(self):
+        try:
+            services = getattr(self.agent, "_memory_services", None)
+            if services is None:
+                return None
+            candidate = getattr(services, "embedder", None)
+            if candidate is not None and hasattr(candidate, "get_load_status"):
+                return candidate
+        except Exception:
+            pass
+        return None
+
+    def _get_memory_index_worker(self):
+        try:
+            services = getattr(self.agent, "_memory_services", None)
+            if services is None:
+                return None
+            return getattr(services, "index_worker", None)
+        except Exception:
+            return None
+
+    async def _handle_get_memory(self, writer) -> None:
+        """Return user + strategy memory for frontend visualization."""
+        try:
+            config = load_config()
+            embedder = self._get_memory_embedder()
+            payload = build_memory_payload(
+                config.workspace_path,
+                embedder=embedder,
+                memory_config=config.agents.memory,
+            )
+            body = json.dumps(payload, ensure_ascii=False)
+            response = self._http_response(200, body)
+            writer.write(response.encode())
+            await writer.drain()
+        except Exception as e:
+            print(f"[API] Error reading memory: {e}")
+            body = json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+            response = self._http_response(500, body)
+            writer.write(response.encode())
+            await writer.drain()
+
+    async def _handle_retry_embedding(self, writer) -> None:
+        """Retry/resume embedding model download and re-queue failed strategy indexes."""
+        embedder = self._get_memory_embedder()
+        if embedder is None:
+            body = json.dumps({"success": False, "error": "Memory or embedder disabled"}, ensure_ascii=False)
+            response = self._http_response(400, body)
+            writer.write(response.encode())
+            await writer.drain()
+            return
+        try:
+            embedder._available = None
+            ok = await embedder.preload()
+            worker = self._get_memory_index_worker()
+            if ok and worker is not None:
+                await worker.recover_failed_after_embedder_ready()
+            snap = embedder.get_load_status()
+            body = json.dumps({"success": ok, "embeddingModel": {
+                "status": snap["status"],
+                "progress": snap["progress"],
+                "model": snap["model"],
+                "message": snap["message"],
+                "error": snap.get("error", ""),
+                "resumed": snap.get("resumed", False),
+            }}, ensure_ascii=False)
+            response = self._http_response(200 if ok else 500, body)
+            writer.write(response.encode())
+            await writer.drain()
+        except Exception as e:
+            print(f"[API] Error retrying embedding download: {e}")
+            body = json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+            response = self._http_response(500, body)
+            writer.write(response.encode())
+            await writer.drain()
+
+    async def _handle_list_sessions(self, writer) -> None:
+        """List frontend sessions for history import."""
+        prefix = "api:frontend"
+        sessions_out: list[dict[str, Any]] = []
+        for info in self.agent.sessions.list_sessions():
+            key = info.get("key", "")
+            if not key.startswith(prefix):
+                continue
+            session = self.agent.sessions.get_or_create(key)
+            sessions_out.append(session_info_dict(session))
+        body = json.dumps({"success": True, "sessions": sessions_out}, ensure_ascii=False)
+        response = self._http_response(200, body)
+        writer.write(response.encode())
+        await writer.drain()
+
+    async def _handle_get_session_messages(self, writer, session_key: str) -> None:
+        """Return UI-friendly messages for a session key."""
+        if not session_key.startswith("api:frontend"):
+            body = json.dumps({"success": False, "error": "Forbidden session key"}, ensure_ascii=False)
+            response = self._http_response(403, body)
+            writer.write(response.encode())
+            await writer.drain()
+            return
+
+        session = self.agent.sessions.get_or_create(session_key)
+        messages = session_messages_for_ui(session)
+        body = json.dumps(
+            {
+                "success": True,
+                "key": session_key,
+                "messages": messages,
+                "updated_at": session.updated_at.isoformat(),
+            },
+            ensure_ascii=False,
+        )
+        response = self._http_response(200, body)
+        writer.write(response.encode())
+        await writer.drain()
+
+    async def _handle_delete_session(self, writer, session_key: str) -> None:
+        """Delete a frontend session and its persisted history."""
+        if not session_key.startswith("api:frontend"):
+            body = json.dumps({"success": False, "error": "Forbidden session key"}, ensure_ascii=False)
+            response = self._http_response(403, body)
+            writer.write(response.encode())
+            await writer.drain()
+            return
+
+        deleted = self.agent.sessions.delete(session_key)
+        if not deleted:
+            body = json.dumps({"success": False, "error": "Session not found"}, ensure_ascii=False)
+            response = self._http_response(404, body)
+            writer.write(response.encode())
+            await writer.drain()
+            return
+
+        body = json.dumps({"success": True}, ensure_ascii=False)
+        response = self._http_response(200, body)
+        writer.write(response.encode())
+        await writer.drain()
+
+    async def _send_streaming_response(
+        self, writer, message, channel='api', model_id=None, api_key=None, api_base=None,
+        personality=None, custom_prompt=None, session_key: str | None = None,
+    ):
         """Send streaming response with tool call updates via SSE."""
         print(f"[API] Streaming response started for: {message[:50]}... (channel={channel}, model={model_id})")
 
@@ -840,9 +1045,10 @@ class APIServer:
         async def process_with_agent():
             """Process message through agent."""
             try:
+                resolved_key = self._resolve_session_key(channel, session_key)
                 response = await self.agent.process_direct(
                     message,
-                    session_key=f"api:frontend:{channel}",
+                    session_key=resolved_key,
                     channel=channel,
                     chat_id="frontend",
                     on_progress=collect_progress,
@@ -868,10 +1074,7 @@ class APIServer:
             final_response[0] = "请求超时，请稍后重试。(请求处理时间超过10分钟)"
 
         # Send final response event
-        final_event = {
-            'type': 'complete',
-            'response': final_response[0]
-        }
+        final_event = self._build_complete_event(final_response[0])
         event_data = f"data: {json.dumps(final_event, ensure_ascii=False)}\n\n"
         try:
             writer.write(event_data.encode())
@@ -881,11 +1084,20 @@ class APIServer:
 
         print(f"[API] Streaming response completed")
 
-    async def _send_standard_response(self, writer, message, channel='api', model_id=None, api_key=None, api_base=None, personality=None, custom_prompt=None):
+    async def _send_standard_response(
+        self, writer, message, channel='api', model_id=None, api_key=None, api_base=None,
+        personality=None, custom_prompt=None, session_key: str | None = None,
+    ):
         """Send non-streaming standard response."""
         try:
-            response = await self.process_message(message, channel, model_id, api_key, api_base, personality, custom_prompt)
-            result = {'success': True, 'response': response}
+            response = await self.process_message(
+                message, channel, model_id, api_key, api_base, personality, custom_prompt, session_key,
+            )
+            result = {
+                'success': True,
+                'response': response.content,
+                'usage': response.usage or empty_usage_dict(),
+            }
             response_body = json.dumps(result, ensure_ascii=False)
             print(f"[API] Response sent successful"  )
         except Exception as e:
@@ -936,15 +1148,19 @@ class APIServer:
             await self.server.wait_closed()
         print("API Server stopped")
 
-    async def process_message(self, message: str, channel: str = 'api', model_id=None, api_key=None, api_base=None, personality=None, custom_prompt=None) -> str:
+    async def process_message(
+        self, message: str, channel: str = 'api', model_id=None, api_key=None, api_base=None,
+        personality=None, custom_prompt=None, session_key: str | None = None,
+    ) -> ProcessResult:
         """Process a message through the agent and return the response."""
         response_future = asyncio.Future()
+        resolved_key = self._resolve_session_key(channel, session_key)
 
         async def handle_response():
             try:
                 response = await self.agent.process_direct(
                     message,
-                    session_key=f"api:frontend:{channel}",
+                    session_key=resolved_key,
                     channel=channel,
                     chat_id="frontend",
                     model=model_id,
@@ -965,7 +1181,10 @@ class APIServer:
             response = await asyncio.wait_for(response_future, timeout=600.0)
             return response
         except asyncio.TimeoutError:
-            return "请求超时，请稍后重试。(请求处理时间超过10分钟)"
+            return ProcessResult(
+                content="请求超时，请稍后重试。(请求处理时间超过10分钟)",
+                usage=empty_usage_dict(),
+            )
 
 
 async def start_api_server(agent, bus, port: int = 3000, channel_manager=None):

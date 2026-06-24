@@ -258,7 +258,7 @@ class TestMemoryConsolidationTypeHandling:
         async def _fake_sleep(delay: int) -> None:
             delays.append(delay)
 
-        monkeypatch.setattr("nanobot.providers.base.asyncio.sleep", _fake_sleep)
+        monkeypatch.setattr("desktopclaw.providers.base.asyncio.sleep", _fake_sleep)
 
         result = await store.consolidate(messages, provider, "test-model")
 

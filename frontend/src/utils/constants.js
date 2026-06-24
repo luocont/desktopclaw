@@ -17,4 +17,7 @@ export const STORAGE_KEYS = {
   personality: 'pet_personality',
   birthday: 'pet_birthday',
   customPrompt: 'pet_custom_prompt',
+  conversations: 'desktopclaw_conversations',
+  activeConversationId: 'desktopclaw_active_conversation_id',
+  historyMigrated: 'desktopclaw_history_migrated',
 }

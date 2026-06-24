@@ -405,9 +405,10 @@ def gateway(
         exec_config=config.tools.exec,
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
+        allowed_paths=config.tools.allowed_paths,
         session_manager=session_manager,
         mcp_servers=config.tools.mcp_servers,
-        channels_config=config.channels,
+        memory_config=config.agents.memory,
     )
 
     # Set cron callback (needs agent)
@@ -439,16 +440,16 @@ def gateway(
 
         message_tool = agent.tools.get("message")
         if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
-            return response
+            return response.content if response else ""
 
-        if job.payload.deliver and job.payload.to and response:
+        if job.payload.deliver and job.payload.to and response and response.content:
             from desktopclaw.bus.events import OutboundMessage
             await bus.publish_outbound(OutboundMessage(
                 channel=job.payload.channel or "cli",
                 chat_id=job.payload.to,
-                content=response
+                content=response.content
             ))
-        return response
+        return response.content if response else ""
     cron.on_job = on_cron_job
 
     # Create channel manager
@@ -478,13 +479,14 @@ def gateway(
         async def _silent(*_args, **_kwargs):
             pass
 
-        return await agent.process_direct(
+        result = await agent.process_direct(
             tasks,
             session_key="heartbeat",
             channel=channel,
             chat_id=chat_id,
             on_progress=_silent,
         )
+        return result.content
 
     async def on_heartbeat_notify(response: str) -> None:
         """Deliver a heartbeat response to the user's channel."""
@@ -609,8 +611,9 @@ def api(
         exec_config=config.tools.exec,
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
+        allowed_paths=config.tools.allowed_paths,
         mcp_servers=config.tools.mcp_servers,
-        channels_config=config.channels,
+        memory_config=config.agents.memory,
     )
 
     channels = ChannelManager(config, bus)
@@ -707,8 +710,9 @@ def agent(
         exec_config=config.tools.exec,
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
+        allowed_paths=config.tools.allowed_paths,
         mcp_servers=config.tools.mcp_servers,
-        channels_config=config.channels,
+        memory_config=config.agents.memory,
     )
 
     # Show spinner when logs are off (no output to miss); skip when logs are on
@@ -732,7 +736,7 @@ def agent(
         async def run_once():
             with _thinking_ctx():
                 response = await agent_loop.process_direct(message, session_id, on_progress=_cli_progress)
-            _print_agent_response(response, render_markdown=markdown)
+            _print_agent_response(response.content, render_markdown=markdown)
             await agent_loop.close_mcp()
 
         asyncio.run(run_once())

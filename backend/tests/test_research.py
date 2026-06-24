@@ -159,7 +159,8 @@ async def test_deep_web_search_progress_callback() -> None:
     research_loop = MagicMock()
     from desktopclaw.agent.research.state import ResearchReport
 
-    async def fake_run(question, on_progress=None, max_pages=None, max_rounds=None):
+    async def fake_run(question, on_progress=None, max_pages=None, max_rounds=None,
+                       sub_questions=None, constraints=None):
         if on_progress:
             await on_progress("test progress")
         return ResearchReport(question=question, markdown="ok")

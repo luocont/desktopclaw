@@ -1,0 +1,21 @@
+=== Heading 1 ===
+font.name=Times New Roman
+font.bold=False
+line_spacing=2.408333333333333, first_indent=None
+=== Heading 2 ===
+font.name=Times New Roman
+font.size=190500 (15.0pt)
+line_spacing=1.7208333333333334, first_indent=None
+=== Heading 3 ===
+font.name=Times New Roman
+font.size=177800 (14.0pt)
+line_spacing=1.7208333333333334, first_indent=None
+=== Body Text ===
+line_spacing=None, first_indent=None
+=== Normal ===
+font.name=Times New Roman
+font.size=152400 (12.0pt)
+line_spacing=None, first_indent=None
+=== Caption ===
+font.name=Arial
+line_spacing=None, first_indent=None

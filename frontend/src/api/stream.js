@@ -19,6 +19,11 @@ import { getBaseUrl } from './config.js'
  * @property {'thinking' | 'progress' | 'tool_call' | 'complete' | string} type
  * @property {string} [content]
  * @property {string} [response]
+ * @property {Object} [usage]
+ * @property {number} [usage.prompt_tokens]
+ * @property {number} [usage.completion_tokens]
+ * @property {number} [usage.total_tokens]
+ * @property {Object} [usage.breakdown]
  */
 
 /**

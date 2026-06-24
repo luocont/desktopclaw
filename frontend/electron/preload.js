@@ -17,13 +17,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   movePetWindow: (x, y) => ipcRenderer.invoke('move-pet-window', x, y),
   getWindowPosition: () => ipcRenderer.invoke('get-window-position'),
   closeWindow: () => ipcRenderer.invoke('close-window'),
+  closeChatWindow: () => ipcRenderer.invoke('close-chat-window'),
 
-  // 多屏幕支持
+  launchUi: (mode, remember) => ipcRenderer.invoke('launch-ui', { mode, remember }),
+  getUiPreference: () => ipcRenderer.invoke('get-ui-preference'),
+  switchUiMode: (mode) => ipcRenderer.invoke('switch-ui-mode', mode),
+
+  syncChatState: (payload) => ipcRenderer.invoke('sync-chat-state', payload),
+  getChatState: () => ipcRenderer.invoke('get-chat-state'),
+  onChatStateUpdated: (callback) => {
+    ipcRenderer.on('chat-state-updated', (_event, data) => callback(data))
+  },
+  removeChatStateListener: () => {
+    ipcRenderer.removeAllListeners('chat-state-updated')
+  },
+
   getScreenInfo: () => ipcRenderer.invoke('get-screen-info'),
   onScreenInfoUpdated: (callback) => {
     ipcRenderer.on('screen-info-updated', (event, data) => callback(data))
   },
   removeScreenInfoListener: () => {
     ipcRenderer.removeAllListeners('screen-info-updated')
-  }
+  },
 })

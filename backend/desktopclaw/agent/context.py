@@ -1,16 +1,22 @@
 """Context builder for assembling agent prompts."""
 
+from __future__ import annotations
+
 import base64
 import mimetypes
 import platform
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from desktopclaw.agent.memory import MemoryStore
+from desktopclaw.agent.memory.prompts import MEMORY_LANGUAGE_RULE, STRATEGY_HINT_TAG
+from desktopclaw.agent.memory.store import MemoryStore
 from desktopclaw.agent.skills import SkillsLoader
 from desktopclaw.utils.helpers import build_assistant_message, detect_image_mime
+
+if TYPE_CHECKING:
+    from desktopclaw.agent.memory.retriever import MRAgentRetriever
 
 
 class ContextBuilder:
@@ -18,11 +24,13 @@ class ContextBuilder:
 
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
+    STRATEGY_HINT_TAG = STRATEGY_HINT_TAG
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, memory_retriever: MRAgentRetriever | None = None):
         self.workspace = workspace
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
+        self.memory_retriever = memory_retriever
 
     def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
         """Build the system prompt from identity, bootstrap files, memory, and skills."""
@@ -34,7 +42,7 @@ class ContextBuilder:
 
         memory = self.memory.get_memory_context()
         if memory:
-            parts.append(f"# Memory\n\n{memory}")
+            parts.append(f"# 记忆\n\n{memory}")
 
         always_skills = self.skills.get_always_skills()
         if always_skills:
@@ -52,6 +60,12 @@ Skills with available="false" need dependencies installed first - you can try in
 {skills_summary}""")
 
         return "\n\n---\n\n".join(parts)
+
+    async def build_strategy_context(self, task: str, session_key: str | None = None) -> str:
+        """L1 retrieval of agent strategies for the current task."""
+        if not self.memory_retriever or not self.memory_retriever.enabled:
+            return ""
+        return await self.memory_retriever.retrieve_for_task(task, session_key=session_key)
 
     def _get_identity(self) -> str:
         """Get the core identity section from AGENTS.md."""
@@ -84,11 +98,14 @@ Skills with available="false" need dependencies installed first - you can try in
 ## Runtime
 {runtime}
 
-## Workspace
-Your workspace is at: {workspace_path}
-- Long-term memory: {workspace_path}/memory/MEMORY.md (write important facts here)
-- History log: {workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
-- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
+## 工作区
+工作区路径: {workspace_path}
+- 长期记忆: {workspace_path}/memory/MEMORY.md（重要事实写入此处，须使用中文）
+- 历史日志: {workspace_path}/memory/HISTORY.md（可用 grep 检索，每条以 [YYYY-MM-DD HH:MM] 开头，须使用中文）
+- 策略记忆: {workspace_path}/memory/reasoning_bank.json（蒸馏的推理策略，须使用中文）
+- 自定义技能: {workspace_path}/skills/{{skill-name}}/SKILL.md
+
+{MEMORY_LANGUAGE_RULE}
 
 {platform_policy}
 
@@ -98,6 +115,8 @@ Your workspace is at: {workspace_path}
 - After writing or editing a file, re-read it if accuracy matters.
 - If a tool call fails, analyze the error before retrying with a different approach.
 - Ask for clarification when the request is ambiguous.
+- 文件与命令操作默认被限制在工作区内（沙箱），不要尝试越界访问电脑其他目录。
+- 联网检索前：先分析用户的真实需求，把它拆解成「精炼的核心问题 + 具体子问题 + 约束（时效/地区/来源偏好）」，再用这份简报调用 `deep_web_search` 派发给搜索 agent；不要把用户原话直接丢进去。
 
 Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel."""
 
@@ -123,7 +142,37 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
 
         return "\n\n".join(parts) if parts else ""
 
-    def build_messages(
+    async def build_messages(
+        self,
+        history: list[dict[str, Any]],
+        current_message: str,
+        skill_names: list[str] | None = None,
+        media: list[str] | None = None,
+        channel: str | None = None,
+        chat_id: str | None = None,
+        session_key: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build the complete message list for an LLM call."""
+        system_prompt = self.build_system_prompt(skill_names)
+        strategy_block = await self.build_strategy_context(current_message, session_key=session_key)
+        if strategy_block:
+            system_prompt = f"{system_prompt}\n\n---\n\n{strategy_block}"
+
+        runtime_ctx = self._build_runtime_context(channel, chat_id)
+        user_content = self._build_user_content(current_message, media)
+
+        if isinstance(user_content, str):
+            merged = f"{runtime_ctx}\n\n{user_content}"
+        else:
+            merged = [{"type": "text", "text": runtime_ctx}] + user_content
+
+        return [
+            {"role": "system", "content": system_prompt},
+            *history,
+            {"role": "user", "content": merged},
+        ]
+
+    def build_messages_sync(
         self,
         history: list[dict[str, Any]],
         current_message: str,
@@ -132,12 +181,10 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         channel: str | None = None,
         chat_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Build the complete message list for an LLM call."""
+        """Sync message builder for token estimation (no strategy retrieval)."""
         runtime_ctx = self._build_runtime_context(channel, chat_id)
         user_content = self._build_user_content(current_message, media)
 
-        # Merge runtime context and user content into a single user message
-        # to avoid consecutive same-role messages that some providers reject.
         if isinstance(user_content, str):
             merged = f"{runtime_ctx}\n\n{user_content}"
         else:
@@ -160,7 +207,6 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             if not p.is_file():
                 continue
             raw = p.read_bytes()
-            # Detect real MIME type from magic bytes; fallback to filename guess
             mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
             if not mime or not mime.startswith("image/"):
                 continue

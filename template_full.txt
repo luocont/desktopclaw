@@ -1,0 +1,95 @@
+1: [Normal] '嘉应学院'
+   run: font=楷体_GB2312, size=457200, bold=True, text='嘉应学院'
+   fmt: align=CENTER (1), indent=None, line_spacing=1.25, space_before=None, space_after=None
+2: [Normal] '计算机学院实验报告'
+   run: font=None, size=457200, bold=True, text='计算机学院实验报告'
+   fmt: align=CENTER (1), indent=None, line_spacing=1.25, space_before=None, space_after=None
+7: [Normal] '     题    目：           XXXXXXXXXXX                '
+   run: font=None, size=177800, bold=None, text='   '
+   run: font=None, size=203200, bold=None, text='  '
+   run: font=黑体, size=203200, bold=None, text='题    目：'
+   run: font=黑体, size=203200, bold=None, text=' '
+   run: font=黑体, size=203200, bold=None, text='          XXXXXXXXXXX    '
+   run: font=黑体, size=203200, bold=None, text='   '
+   run: font=黑体, size=203200, bold=None, text='         '
+   fmt: align=None, indent=74295, line_spacing=1.25, space_before=None, space_after=None
+8: [Normal] '班    级：              XXXXXX                  '
+   run: font=黑体, size=203200, bold=None, text='班    级'
+   run: font=黑体, size=203200, bold=None, text='：'
+   run: font=黑体, size=203200, bold=None, text='   '
+   run: font=黑体, size=203200, bold=None, text='           XXXXXX'
+   run: font=黑体, size=203200, bold=None, text='           '
+   run: font=黑体, size=203200, bold=None, text='  '
+   run: font=黑体, size=203200, bold=None, text='     '
+   fmt: align=None, indent=266700, line_spacing=1.25, space_before=None, space_after=None
+9: [Normal] '组    别：            XXXXXXXXX                 '
+   run: font=黑体, size=203200, bold=None, text='组    别'
+   run: font=黑体, size=203200, bold=None, text='：'
+   run: font=黑体, size=203200, bold=None, text='   '
+   run: font=黑体, size=203200, bold=None, text='         XXXXXXXXX'
+   run: font=黑体, size=203200, bold=None, text='         '
+   run: font=黑体, size=203200, bold=None, text='        '
+   fmt: align=None, indent=266700, line_spacing=1.25, space_before=None, space_after=None
+10: [Normal] '学    院：          计 算 机 学 院              '
+   run: font=黑体, size=203200, bold=None, text='学    院：'
+   run: font=黑体, size=203200, bold=None, text='   '
+   run: font=黑体, size=203200, bold=None, text='       '
+   run: font=黑体, size=203200, bold=None, text='计 算 机 学 院             '
+   run: font=黑体, size=203200, bold=None, text=' '
+   fmt: align=None, indent=266700, line_spacing=1.25, space_before=None, space_after=None
+11: [Normal] '专    业：          XXXXXXXXXXXXXXX             '
+   run: font=黑体, size=203200, bold=None, text='专    业：'
+   run: font=黑体, size=203200, bold=None, text='   '
+   run: font=黑体, size=203200, bold=None, text='       XXXXXXXXXXXXXXX'
+   run: font=黑体, size=203200, bold=None, text=' '
+   run: font=黑体, size=203200, bold=None, text='            '
+   fmt: align=None, indent=266700, line_spacing=1.25, space_before=None, space_after=None
+12: [Normal] '指导老师：            XXX、XXX                  '
+   run: font=黑体, size=203200, bold=None, text='指导老师：'
+   run: font=黑体, size=203200, bold=None, text='   '
+   run: font=黑体, size=203200, bold=None, text='         XXX、XXX '
+   run: font=黑体, size=203200, bold=None, text='                 '
+   fmt: align=None, indent=266700, line_spacing=1.25, space_before=None, space_after=None
+18: [Normal] '嘉应学院'
+   run: font=None, size=228600, bold=None, text='嘉应学院'
+   fmt: align=CENTER (1), indent=None, line_spacing=1.25, space_before=None, space_after=None
+20: [Heading 1] '报告基本规范'
+   fmt: align=JUSTIFY (3), indent=2286000, line_spacing=None, space_before=None, space_after=None
+21: [Heading 2] '2.1 图表公式的格式'
+   fmt: align=None, indent=None, line_spacing=None, space_before=None, space_after=None
+22: [Normal] '这里先介绍一下什么是一级二级三级标题：一级标题指的是每章的标题，比如第一章、第二章、第三章...；二级标题指的是一级标题里面的标题，比如1.1、1.2、2.1、2.2...；三级标题指的是二级标题里面的标题，比如1.1.1、2.2.1...。'
+   fmt: align=None, indent=304800, line_spacing=None, space_before=None, space_after=None
+23: [Normal] '建议大家最好不要到四级标题，如果三级标题里面还要细分几个部分，则可以用1、2、3、再细分，如果里面还要细分，则用（1）（2）（3）再细分。总结下来就是：'
+   fmt: align=None, indent=304800, line_spacing=None, space_before=None, space_after=None
+24: [Normal] '第一章----1.1----1.1.1---1、----（1）'
+   fmt: align=None, indent=304800, line_spacing=None, space_before=None, space_after=None
+25: [Heading 3] '2.1.1 图表的格式'
+   fmt: align=None, indent=None, line_spacing=None, space_before=None, space_after=None
+26: [Body Text] '论文中的图要自己画，图要清晰，大小合适。表格以美观为主，最好使用三线表。论文中只要有图或表都要在正文中有引用，比如：如图2-1所示、如表2-1所示。图表按一级标题编号，如第二章中就用2-1，2-2，2-3...。图表都要居中，图的示例如图2-1所示（注意：图的标题在图的下面，用宋体五号字，居中），表的示例如表2-1所示（注意：表的标题在表的下面，用宋体五号字，居中；表格内容建议用宋体五号字）。'
+   run: font=None, size=152400, bold=False, text='论文中的图要自己画，图要清晰，大小合适。表格以美观为主，最好使用三线表。论文中只'
+   fmt: align=JUSTIFY (3), indent=304800, line_spacing=1.25, space_before=0, space_after=0
+28: [Caption] '图 2-1 图的示例'
+   run: font=Times New Roman, size=133350, bold=None, text='图 '
+   run: font=Times New Roman, size=133350, bold=None, text='2-1 '
+   run: font=Times New Roman, size=133350, bold=None, text='图的示例'
+   fmt: align=CENTER (1), indent=None, line_spacing=285750, space_before=0, space_after=0
+31: [Body Text] '这里需要注意：论文不要因为插图或表出现大量页面空白，有空白调不了可以用下面的文章复制上来填充，总之页面要美观。表尽量不要跨页，如果没法避免应该在下一页标注续表x-x，并且要有字段名。'
+   run: font=None, size=152400, bold=False, text='这里需要注意：论文不要因为插图或表出现大量页面空白，有空白调不了可以用下面的文章'
+   fmt: align=JUSTIFY (3), indent=304800, line_spacing=1.25, space_before=0, space_after=0
+33: [Caption] '表2-1 表格示例'
+   run: font=Times New Roman, size=133350, bold=None, text='表2-1 表格示例'
+   fmt: align=CENTER (1), indent=None, line_spacing=285750, space_before=0, space_after=0
+36: [Heading 3] '2.1.2 字体、段落格式'
+   fmt: align=None, indent=None, line_spacing=None, space_before=None, space_after=None
+37: [Normal] '一级标题采用黑体小二字体；'
+   fmt: align=None, indent=304800, line_spacing=None, space_before=None, space_after=None
+38: [Normal] '二级标题采用黑体小三字体；'
+   fmt: align=None, indent=304800, line_spacing=None, space_before=None, space_after=None
+39: [Normal] '三级标题采用黑体四号字体；'
+   fmt: align=None, indent=304800, line_spacing=None, space_before=None, space_after=None
+40: [Normal] '正文采用宋体小四字体（英文则采用Times new roman字体）；'
+   fmt: align=None, indent=304800, line_spacing=None, space_before=None, space_after=None
+41: [Normal] '图或表标题采用宋体五号字体（英文则采用Times new roman字体）；'
+   fmt: align=None, indent=304800, line_spacing=None, space_before=None, space_after=None
+42: [Normal] '采用多倍行距，行距设置值为1.25。'
+   fmt: align=None, indent=304800, line_spacing=None, space_before=None, space_after=None

@@ -48,6 +48,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+memory = [
+    "sentence-transformers>=3.0.0,<4.0.0",
+    "transformers>=4.51.0",
+    "torch>=2.0.0",
+]
 web-search = [
     "playwright>=1.49.0,<2.0.0",
 ]
@@ -115,3 +120,6 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "memory: tests requiring sentence-transformers optional dependency",
+]

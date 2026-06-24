@@ -8,13 +8,16 @@ import os
 import re
 import sys
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from loguru import logger
 
 from desktopclaw.agent.context import ContextBuilder
-from desktopclaw.agent.memory import MemoryConsolidator
+from desktopclaw.agent.memory.consolidator import MemoryConsolidator
+from desktopclaw.agent.memory.factory import build_memory_services
+from desktopclaw.agent.memory.triggers import TriggerState, should_retrieve_before_llm
 from desktopclaw.agent.subagent import SubagentManager
 from desktopclaw.agent.tools.cron import CronTool
 from desktopclaw.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
@@ -25,14 +28,26 @@ from desktopclaw.agent.tools.spawn import SpawnTool
 from desktopclaw.agent.research.loop import ResearchLoop
 from desktopclaw.agent.tools.bing_search import BingSearchBackend
 from desktopclaw.agent.tools.deep_web_search import DeepWebSearchTool
+from desktopclaw.session.ui_messages import turn_messages_to_ui_blocks
 from desktopclaw.bus.events import InboundMessage, OutboundMessage
 from desktopclaw.bus.queue import MessageBus
 from desktopclaw.providers.base import LLMProvider
 from desktopclaw.session.manager import Session, SessionManager
+from desktopclaw.utils.usage import UsageTracker, empty_usage_dict, reset_tracker, set_tracker
 
 if TYPE_CHECKING:
-    from desktopclaw.config.schema import ChannelsConfig, DeepResearchConfig, ExecToolConfig, WebSearchConfig
+    from desktopclaw.config.schema import ChannelsConfig, DeepResearchConfig, ExecToolConfig, MemoryConfig, WebSearchConfig
     from desktopclaw.cron.service import CronService
+
+
+@dataclass
+class ProcessResult:
+    """Direct processing result with token usage."""
+
+    content: str
+    usage: dict[str, Any]
+    error: str | None = None
+    blocks: list[dict[str, Any]] | None = None
 
 
 class AgentLoop:
@@ -64,11 +79,13 @@ class AgentLoop:
         exec_config: ExecToolConfig | None = None,
         cron_service: CronService | None = None,
         restrict_to_workspace: bool = False,
+        allowed_paths: list[str] | None = None,
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
+        memory_config: MemoryConfig | None = None,
     ):
-        from desktopclaw.config.schema import DeepResearchConfig, ExecToolConfig, WebSearchConfig
+        from desktopclaw.config.schema import DeepResearchConfig, ExecToolConfig, MemoryConfig, WebSearchConfig
         self.bus = bus
         self.channels_config = channels_config
         self.provider = provider
@@ -94,8 +111,21 @@ class AgentLoop:
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
+        self.allowed_paths = allowed_paths or []
 
-        self.context = ContextBuilder(workspace)
+        mem_cfg = memory_config or MemoryConfig()
+        self._memory_config = mem_cfg
+        self._memory_services = build_memory_services(
+            workspace=workspace,
+            provider=provider,
+            model=self.model,
+            fast_model=fast_model or "",
+            config=mem_cfg,
+        )
+        self._memory_worker_started = False
+        self._memory_shutdown = False
+        self._memory_preload_task: asyncio.Task | None = None
+        self.context = ContextBuilder(workspace, memory_retriever=self._memory_services.retriever)
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.subagents = SubagentManager(
@@ -106,6 +136,10 @@ class AgentLoop:
             web_proxy=web_proxy,
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
+            allowed_paths=self.allowed_paths,
+            memory_retriever=self._memory_services.retriever,
+            strategy_distiller=self._memory_services.distiller,
+            memory_config=mem_cfg,
         )
 
         self._running = False
@@ -121,7 +155,7 @@ class AgentLoop:
             model=self.model,
             sessions=self.sessions,
             context_window_tokens=context_window_tokens,
-            build_messages=self.context.build_messages,
+            build_messages=self.context.build_messages_sync,
             get_tool_definitions=self.tools.get_definitions,
         )
         self._register_default_tools()
@@ -130,12 +164,17 @@ class AgentLoop:
         """Register the default set of tools."""
         allowed_dir = self.workspace if self.restrict_to_workspace else None
         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool):
-            self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
+            self.tools.register(cls(
+                workspace=self.workspace,
+                allowed_dir=allowed_dir,
+                allowed_paths=self.allowed_paths,
+            ))
         self.tools.register(ExecTool(
             working_dir=str(self.workspace),
             timeout=self.exec_config.timeout,
             restrict_to_workspace=self.restrict_to_workspace,
             path_append=self.exec_config.path_append,
+            allowed_paths=self.allowed_paths,
         ))
         self.tools.register(self._deep_web_search_tool)
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
@@ -164,6 +203,64 @@ class AgentLoop:
                 self._mcp_stack = None
         finally:
             self._mcp_connecting = False
+
+    async def _start_memory_worker(self, *, preload: bool = True) -> bool:
+        """Launch the background memory indexer (preload + recover + run).
+
+        Idempotent — safe to call from both ``run()`` and ``process_direct()``.
+        The indexer is fire-and-forget: failures here never block the agent.
+
+        Returns True if the worker was started by *this* call (caller owns its
+        lifecycle and should stop it when done), False if it was already running
+        or is disabled.
+        """
+        if self._memory_worker_started or self._memory_shutdown:
+            return False
+        worker = self._memory_services.index_worker
+        if worker is None:
+            return False
+        self._memory_worker_started = True
+        try:
+            worker.recover_pending()
+            worker.start()
+            if preload and self._memory_config.preload_embedding_on_start:
+                # Tracked so it can be cancelled on shutdown — avoids orphan
+                # download threads on short-lived event loops (tests / one-shot CLI).
+                async def _preload_and_recover() -> None:
+                    ok = await worker.preload_embedder()
+                    if ok:
+                        await worker.recover_failed_after_embedder_ready()
+
+                self._memory_preload_task = asyncio.create_task(_preload_and_recover())
+        except Exception:
+            logger.exception("Failed to start memory index worker; indexing deferred")
+        return True
+
+    async def _stop_memory_worker(self) -> None:
+        """Stop the background memory indexer if it is running.
+
+        Resets the started flag so a later ``process_direct`` call can spin the
+        worker back up. The permanent shutdown flag (``_memory_shutdown``) is
+        only set by ``close_mcp``.
+        """
+        worker = self._memory_services.index_worker
+        if worker is None:
+            return
+        # Cancel any in-flight preload so its worker thread doesn't outlive the
+        # caller's event loop (the underlying model download is uncancellable,
+        # but we stop awaiting it).
+        if self._memory_preload_task and not self._memory_preload_task.done():
+            self._memory_preload_task.cancel()
+            try:
+                await self._memory_preload_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._memory_preload_task = None
+        try:
+            await worker.stop()
+        except Exception:
+            logger.exception("Memory index worker stop failed")
+        self._memory_worker_started = False
 
     def _set_tool_context(
         self,
@@ -207,94 +304,128 @@ class AgentLoop:
         api_base: str | None = None,
         personality: str | None = None,
         custom_prompt: str | None = None,
-    ) -> tuple[str | None, list[str], list[dict]]:
+        session_key: str | None = None,
+    ) -> tuple[str | None, list[str], list[dict], dict[str, Any]]:
         """Run the agent iteration loop."""
         messages = initial_messages
         iteration = 0
         final_content = None
         tools_used: list[str] = []
+        tracker = UsageTracker()
+        tracker_token = set_tracker(tracker)
+        trigger_state = TriggerState()
+        retriever = self._memory_services.retriever
+        dynamic = self._memory_config.enabled and self._memory_config.dynamic_retrieval
+        hit_max_iterations = False
+        llm_error = False
 
-        while iteration < self.max_iterations:
-            iteration += 1
+        try:
+            while iteration < self.max_iterations:
+                iteration += 1
 
-            tool_defs = self.tools.get_definitions()
+                if dynamic and retriever:
+                    level = should_retrieve_before_llm(trigger_state)
+                    if level:
+                        messages = await retriever.retrieve_and_inject(
+                            messages, level, session_key=session_key,
+                        )
 
-            chat_model = model or self.model
-            logger.info(f"[_run_agent_loop] model param: {model}, self.model: {self.model}, chat_model: {chat_model}")
-            if hasattr(self._deep_web_search_tool, "set_research_context"):
-                self._deep_web_search_tool.set_research_context(
-                    main_model=chat_model,
-                    fast_model=self._fast_model or chat_model,
-                )
-            chat_kwargs = {
-                "messages": messages,
-                "tools": tool_defs,
-                "model": chat_model,
-            }
-            if api_key:
-                chat_kwargs["api_key"] = api_key
-            if api_base:
-                chat_kwargs["api_base"] = api_base
-            if personality:
-                chat_kwargs["personality"] = personality
-            if custom_prompt:
-                chat_kwargs["custom_prompt"] = custom_prompt
-            
-            response = await self.provider.chat_with_retry(**chat_kwargs)
+                tool_defs = self.tools.get_definitions()
 
-            if response.has_tool_calls:
-                if on_progress:
-                    thought = self._strip_think(response.content)
-                    if thought:
-                        await on_progress(thought)
-                    await on_progress(self._tool_hint(response.tool_calls), tool_hint=True)
-
-                tool_call_dicts = [
-                    tc.to_openai_tool_call()
-                    for tc in response.tool_calls
-                ]
-                messages = self.context.add_assistant_message(
-                    messages, response.content, tool_call_dicts,
-                    reasoning_content=response.reasoning_content,
-                    thinking_blocks=response.thinking_blocks,
-                )
-
-                for tool_call in response.tool_calls:
-                    tools_used.append(tool_call.name)
-                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                    logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
-                    messages = self.context.add_tool_result(
-                        messages, tool_call.id, tool_call.name, result
+                chat_model = model or self.model
+                logger.info(f"[_run_agent_loop] model param: {model}, self.model: {self.model}, chat_model: {chat_model}")
+                if hasattr(self._deep_web_search_tool, "set_research_context"):
+                    self._deep_web_search_tool.set_research_context(
+                        main_model=chat_model,
+                        fast_model=self._fast_model or chat_model,
                     )
-            else:
-                clean = self._strip_think(response.content)
-                # Don't persist error responses to session history — they can
-                # poison the context and cause permanent 400 loops (#1303).
-                if response.finish_reason == "error":
-                    logger.error("LLM returned error: {}", (clean or "")[:200])
-                    final_content = clean or "Sorry, I encountered an error calling the AI model."
+                chat_kwargs = {
+                    "messages": messages,
+                    "tools": tool_defs,
+                    "model": chat_model,
+                }
+                if api_key:
+                    chat_kwargs["api_key"] = api_key
+                if api_base:
+                    chat_kwargs["api_base"] = api_base
+                if personality:
+                    chat_kwargs["personality"] = personality
+                if custom_prompt:
+                    chat_kwargs["custom_prompt"] = custom_prompt
+
+                response = await self.provider.chat_with_retry(**chat_kwargs)
+
+                if response.has_tool_calls:
+                    if on_progress:
+                        thought = self._strip_think(response.content)
+                        if thought:
+                            await on_progress(thought)
+                        await on_progress(self._tool_hint(response.tool_calls), tool_hint=True)
+
+                    tool_call_dicts = [
+                        tc.to_openai_tool_call()
+                        for tc in response.tool_calls
+                    ]
+                    messages = self.context.add_assistant_message(
+                        messages, response.content, tool_call_dicts,
+                        reasoning_content=response.reasoning_content,
+                        thinking_blocks=response.thinking_blocks,
+                    )
+
+                    for tool_call in response.tool_calls:
+                        tools_used.append(tool_call.name)
+                        args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                        logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
+                        result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                        messages = self.context.add_tool_result(
+                            messages, tool_call.id, tool_call.name, result
+                        )
+                        if dynamic and retriever and self._memory_config.fast_retrieval_on_tool_error:
+                            level = trigger_state.record_tool_result(tool_call.name, result)
+                            if level:
+                                trigger_state.pending_retrieval = level
+                else:
+                    clean = self._strip_think(response.content)
+                    # Don't persist error responses to session history — they can
+                    # poison the context and cause permanent 400 loops (#1303).
+                    if response.finish_reason == "error":
+                        llm_error = True
+                        logger.error("LLM returned error: {}", (clean or "")[:200])
+                        final_content = clean or "Sorry, I encountered an error calling the AI model."
+                        break
+                    messages = self.context.add_assistant_message(
+                        messages, clean, reasoning_content=response.reasoning_content,
+                        thinking_blocks=response.thinking_blocks,
+                    )
+                    final_content = clean
                     break
-                messages = self.context.add_assistant_message(
-                    messages, clean, reasoning_content=response.reasoning_content,
-                    thinking_blocks=response.thinking_blocks,
+
+            if final_content is None and iteration >= self.max_iterations:
+                logger.warning("Max iterations ({}) reached", self.max_iterations)
+                hit_max_iterations = True
+                final_content = (
+                    f"I reached the maximum number of tool call iterations ({self.max_iterations}) "
+                    "without completing the task. You can try breaking the task into smaller steps."
                 )
-                final_content = clean
-                break
 
-        if final_content is None and iteration >= self.max_iterations:
-            logger.warning("Max iterations ({}) reached", self.max_iterations)
-            final_content = (
-                f"I reached the maximum number of tool call iterations ({self.max_iterations}) "
-                "without completing the task. You can try breaking the task into smaller steps."
-            )
+            return final_content, tools_used, messages, tracker.to_dict(), hit_max_iterations, llm_error
+        finally:
+            reset_tracker(tracker_token)
 
-        return final_content, tools_used, messages
+    @staticmethod
+    def _merge_turn_usage(turn_usage: dict[str, Any], pending: dict[str, Any] | None) -> dict[str, Any]:
+        if not pending:
+            return turn_usage
+        combined = UsageTracker()
+        combined.merge_tracker(turn_usage)
+        combined.merge_tracker(pending)
+        return combined.to_dict()
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
         await self._connect_mcp()
+        await self._start_memory_worker()
         logger.info("Agent loop started")
 
         while self._running:
@@ -364,7 +495,14 @@ class AgentLoop:
                 ))
 
     async def close_mcp(self) -> None:
-        """Close MCP connections and Bing search browser."""
+        """Close MCP connections, Bing search browser, and the memory indexer."""
+        self._memory_shutdown = True
+        worker = self._memory_services.index_worker
+        if worker is not None:
+            try:
+                await worker.stop()
+            except Exception:
+                logger.exception("Memory index worker shutdown failed")
         if self._mcp_stack:
             try:
                 await self._mcp_stack.aclose()
@@ -400,16 +538,28 @@ class AgentLoop:
             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=0)
-            messages = self.context.build_messages(
+            messages = await self.context.build_messages(
                 history=history,
                 current_message=msg.content, channel=channel, chat_id=chat_id,
+                session_key=key,
             )
-            final_content, _, all_msgs = await self._run_agent_loop(messages)
+            final_content, tools_used, all_msgs, usage, hit_max, _llm_error = await self._run_agent_loop(
+                messages, session_key=key,
+            )
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
-            return OutboundMessage(channel=channel, chat_id=chat_id,
-                                  content=final_content or "Background task completed.")
+            if self._memory_services.distiller:
+                await self._memory_services.distiller.distill_from_turn(
+                    key, msg.content, all_msgs, tools_used, hit_max_iterations=hit_max,
+                )
+            usage = self._merge_turn_usage(usage, self.subagents.pop_pending_usage(key))
+            return OutboundMessage(
+                channel=channel,
+                chat_id=chat_id,
+                content=final_content or "Background task completed.",
+                metadata={"usage": usage},
+            )
 
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
         logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
@@ -470,42 +620,48 @@ class AgentLoop:
                 message_tool.start_turn()
 
         history = session.get_history(max_messages=0)
-        initial_messages = self.context.build_messages(
+        initial_messages = await self.context.build_messages(
             history=history,
             current_message=msg.content,
             media=msg.media if msg.media else None,
             channel=msg.channel, chat_id=msg.chat_id,
+            session_key=key,
         )
 
-        async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
-            meta = dict(msg.metadata or {})
-            meta["_progress"] = True
-            meta["_tool_hint"] = tool_hint
-            await self.bus.publish_outbound(OutboundMessage(
-                channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
-            ))
-
         logger.info(f"[_process_message] Calling _run_agent_loop with model={model}, api_key={api_key}, api_base={api_base}")
-        final_content, _, all_msgs = await self._run_agent_loop(
+        final_content, tools_used, all_msgs, usage, hit_max, llm_error = await self._run_agent_loop(
             initial_messages, on_progress=on_progress or _bus_progress,
             model=model, api_key=api_key, api_base=api_base, personality=personality, custom_prompt=custom_prompt,
+            session_key=key,
         )
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
-        self._save_turn(session, all_msgs, 1 + len(history))
+        skip = 1 + len(history)
+        turn_blocks = turn_messages_to_ui_blocks(all_msgs[skip:])
+        self._save_turn(session, all_msgs, skip)
         self.sessions.save(session)
         await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+
+        if self._memory_services.distiller:
+            await self._memory_services.distiller.distill_from_turn(
+                key, msg.content, all_msgs, tools_used, hit_max_iterations=hit_max,
+            )
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             return None
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
+        metadata = dict(msg.metadata or {})
+        metadata["usage"] = usage
+        metadata["blocks"] = turn_blocks
+        if llm_error:
+            metadata["llm_error"] = True
         return OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id, content=final_content,
-            metadata=msg.metadata or {},
+            metadata=metadata,
         )
 
     def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
@@ -526,6 +682,8 @@ class AgentLoop:
                         entry["content"] = parts[1]
                     else:
                         continue
+                if isinstance(content, str) and content.startswith(ContextBuilder.STRATEGY_HINT_TAG):
+                    continue
                 if isinstance(content, list):
                     filtered = []
                     for c in content:
@@ -555,11 +713,32 @@ class AgentLoop:
         api_base: str | None = None,
         personality: str | None = None,
         custom_prompt: str | None = None,
-    ) -> str:
+    ) -> ProcessResult:
         """Process a message directly (for CLI or cron usage)."""
         await self._connect_mcp()
-        msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
-        response = await self._process_message(msg, session_key=session_key, on_progress=on_progress, 
-                                               model=model, api_key=api_key, api_base=api_base, 
-                                               personality=personality, custom_prompt=custom_prompt)
-        return response.content if response else ""
+        # process_direct is a one-shot entry point (vs the long-lived run() loop).
+        # Start the indexer if it isn't already running, then make sure we stop it
+        # before returning so no background task is orphaned on the caller's event
+        # loop (matters for short-lived CLI/cron invocations and for tests).
+        # Skip model preload here — a one-shot call shouldn't block on a model
+        # download; the cold-path indexer downloads on its own when it runs.
+        started_here = await self._start_memory_worker(preload=False)
+        try:
+            msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
+            response = await self._process_message(msg, session_key=session_key, on_progress=on_progress,
+                                                   model=model, api_key=api_key, api_base=api_base,
+                                                   personality=personality, custom_prompt=custom_prompt)
+        finally:
+            if started_here:
+                await self._stop_memory_worker()
+        if response:
+            usage = (response.metadata or {}).get("usage") or empty_usage_dict()
+            llm_error = bool((response.metadata or {}).get("llm_error"))
+            blocks = (response.metadata or {}).get("blocks")
+            return ProcessResult(
+                content=response.content,
+                usage=usage,
+                error=response.content if llm_error else None,
+                blocks=blocks,
+            )
+        return ProcessResult(content="", usage=empty_usage_dict())
