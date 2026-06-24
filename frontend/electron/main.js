@@ -79,7 +79,7 @@ const startNewBackend = (resolve, reject) => {
     
     if (isDev) {
         backendPath = 'python'
-        args = ['-m', 'desktopclaw', 'api', '--port', '18790']
+        args = ['-m', 'desktopclaw', 'gateway', '--port', '18790']
         cwd = path.join(__dirname, '..', '..', 'backend')
     } else {
         backendPath = path.join(getResourcePath('backend'), 'desktopclaw.exe')
