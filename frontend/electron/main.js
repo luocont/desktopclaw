@@ -17,10 +17,33 @@ const settingsPath = path.join(app.getPath('userData'), 'settings.json')
 // 读取设置
 function loadSettings() {
     try {
+        let settings = {}
         if (fs.existsSync(settingsPath)) {
             const data = fs.readFileSync(settingsPath, 'utf8')
-            return JSON.parse(data)
+            settings = JSON.parse(data)
         }
+
+        // 从 ~/.nanobot/config.json 读取 QQ 配置
+        try {
+            const os = require('os')
+            const nanobotConfigPath = path.join(os.homedir(), '.nanobot', 'config.json')
+            if (fs.existsSync(nanobotConfigPath)) {
+                const data = fs.readFileSync(nanobotConfigPath, 'utf8')
+                const nanobotConfig = JSON.parse(data)
+                if (nanobotConfig.channels && nanobotConfig.channels.qq) {
+                    if (nanobotConfig.channels.qq.appId && !settings.qqAppId) {
+                        settings.qqAppId = nanobotConfig.channels.qq.appId
+                    }
+                    if (nanobotConfig.channels.qq.secret && !settings.qqSecret) {
+                        settings.qqSecret = nanobotConfig.channels.qq.secret
+                    }
+                }
+            }
+        } catch (configError) {
+            console.error('[Electron] Failed to read nanobot config:', configError)
+        }
+
+        return settings
     } catch (error) {
         console.error('[Electron] Failed to load settings:', error)
     }
@@ -31,6 +54,28 @@ function loadSettings() {
 function saveSettings(settings) {
     try {
         fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2))
+
+        // 同步更新 ~/.nanobot/config.json 中的 QQ 配置
+        try {
+            const os = require('os')
+            const nanobotConfigPath = path.join(os.homedir(), '.nanobot', 'config.json')
+            if (fs.existsSync(nanobotConfigPath)) {
+                const data = fs.readFileSync(nanobotConfigPath, 'utf8')
+                const nanobotConfig = JSON.parse(data)
+                if (nanobotConfig.channels && nanobotConfig.channels.qq) {
+                    if (settings.qqAppId !== undefined) {
+                        nanobotConfig.channels.qq.appId = settings.qqAppId
+                    }
+                    if (settings.qqSecret !== undefined) {
+                        nanobotConfig.channels.qq.secret = settings.qqSecret
+                    }
+                    fs.writeFileSync(nanobotConfigPath, JSON.stringify(nanobotConfig, null, 2))
+                }
+            }
+        } catch (configError) {
+            console.error('[Electron] Failed to update nanobot config:', configError)
+        }
+
         return true
     } catch (error) {
         console.error('[Electron] Failed to save settings:', error)
@@ -79,7 +124,7 @@ const startNewBackend = (resolve, reject) => {
     
     if (isDev) {
         backendPath = 'python'
-        args = ['-m', 'desktopclaw', 'api', '--port', '18790']
+        args = ['-m', 'desktopclaw', 'gateway', '--port', '18790']
         cwd = path.join(__dirname, '..', '..', 'backend')
     } else {
         backendPath = path.join(getResourcePath('backend'), 'desktopclaw.exe')
@@ -199,10 +244,32 @@ app.on('ready', async () => {
 app.on('window-all-closed',() => {
     if (backendProcess) {
         console.log('[Electron] Killing backend process...')
-        backendProcess.kill()
+        try {
+            backendProcess.kill('SIGTERM')
+            setTimeout(() => {
+                if (backendProcess && backendProcess.exitCode === null) {
+                    console.log('[Electron] Force killing backend process...')
+                    backendProcess.kill('SIGKILL')
+                }
+            }, 3000)
+        } catch (e) {
+            console.error('[Electron] Failed to kill backend:', e)
+        }
         backendProcess = null
     }
     if(process.platform !== 'darwin')app.quit()
+})
+
+app.on('before-quit', () => {
+    if (backendProcess) {
+        console.log('[Electron] Before quit: killing backend process...')
+        try {
+            backendProcess.kill('SIGKILL')
+        } catch (e) {
+            console.error('[Electron] Failed to kill backend on before-quit:', e)
+        }
+        backendProcess = null
+    }
 })
 
 app.on('activate',()=>{

@@ -230,6 +230,24 @@
                 rows="4"
               />
             </div>
+            <div class="settings-field">
+              <label class="settings-label">QQ App ID</label>
+              <input
+                v-model="qqAppId"
+                type="text"
+                class="settings-input"
+                placeholder="QQ机器人的App ID"
+              />
+            </div>
+            <div class="settings-field">
+              <label class="settings-label">QQ Secret</label>
+              <input
+                v-model="qqSecret"
+                type="password"
+                class="settings-input"
+                placeholder="QQ机器人的Secret"
+              />
+            </div>
             <button class="settings-save-btn" @click="saveSettings">
               保存设置
             </button>
@@ -361,6 +379,10 @@ const storedBirthday = localStorage.getItem('pet_birthday') || '';
 const birthday = ref(storedBirthday);
 const storedCustomPrompt = localStorage.getItem('pet_custom_prompt') || '';
 const customPrompt = ref(storedCustomPrompt);
+const storedQqAppId = localStorage.getItem('pet_qq_app_id') || '';
+const qqAppId = ref(storedQqAppId);
+const storedQqSecret = localStorage.getItem('pet_qq_secret') || '';
+const qqSecret = ref(storedQqSecret);
 
 const personalityOptions = [
   { value: 'gentle', label: '温柔', description: '说话温柔体贴' },
@@ -880,6 +902,8 @@ async function loadSettingsFromFile() {
         if (settings.personality !== undefined) personality.value = settings.personality;
         if (settings.birthday !== undefined) birthday.value = settings.birthday;
         if (settings.customPrompt !== undefined) customPrompt.value = settings.customPrompt;
+        if (settings.qqAppId !== undefined) qqAppId.value = settings.qqAppId;
+        if (settings.qqSecret !== undefined) qqSecret.value = settings.qqSecret;
       }
     } catch (error) {
       console.error('Failed to load settings from file:', error);
@@ -894,13 +918,15 @@ function saveSettings() {
     modelId: modelId.value,
     personality: personality.value,
     birthday: birthday.value,
-    customPrompt: customPrompt.value
+    customPrompt: customPrompt.value,
+    qqAppId: qqAppId.value,
+    qqSecret: qqSecret.value
   };
-  
+
   if (window.electronAPI && window.electronAPI.saveSettings) {
     window.electronAPI.saveSettings(settings).catch(console.error);
   }
-  
+
   // 同时保存到 localStorage 作为备份
   localStorage.setItem('pet_base_url', baseUrl.value);
   localStorage.setItem('pet_api_key', apiKey.value);
@@ -908,7 +934,9 @@ function saveSettings() {
   localStorage.setItem('pet_personality', personality.value);
   localStorage.setItem('pet_birthday', birthday.value);
   localStorage.setItem('pet_custom_prompt', customPrompt.value);
-  
+  localStorage.setItem('pet_qq_app_id', qqAppId.value);
+  localStorage.setItem('pet_qq_secret', qqSecret.value);
+
   showSettings.value = false;
 }
 
